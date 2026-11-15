@@ -135,6 +135,7 @@ class UpdateTest(unittest.TestCase):
         with patch('builtins.open',side_effect=[tty_in,tty_out]) as opened:
             self.assertEqual(updater.prompt_address(),dict(host='vpn.example.com',mode='domain'))
         self.assertEqual(opened.call_args_list,[call('/dev/tty','r'),call('/dev/tty','w')])
+        self.assertIn('нажмите Enter',tty_out.output)
         self.assertIn('Укажите публичный',tty_out.output)
         with patch('builtins.open',side_effect=[TTY(['2001:db8::1\n']),TTY([])]):
             self.assertEqual(updater.prompt_address(),dict(host='2001:db8::1',mode='ip'))
@@ -175,6 +176,7 @@ class UpdateTest(unittest.TestCase):
                 os.kill(pid,signal.SIGKILL);os.waitpid(pid,0)
             os.close(master)
         self.assertEqual(os.waitstatus_to_exitcode(status),0,output.decode(errors='replace'))
+        self.assertIn('нажмите Enter'.encode(),output)
         self.assertIn(b'"host": "vpn.example.com"',output)
         self.assertIn(b'"mode": "domain"',output)
 
@@ -182,6 +184,8 @@ class UpdateTest(unittest.TestCase):
         result=subprocess.CompletedProcess([],1,'','{"error":"certificate failed"}')
         with patch.object(updater.subprocess,'run',return_value=result):
             with self.assertRaisesRegex(RuntimeError,'certificate failed'):updater.configure_initial_https(dict(host='vpn.example.com',mode='domain'))
+        with patch.object(updater.subprocess,'run',side_effect=subprocess.TimeoutExpired('helper',300)):
+            with self.assertRaisesRegex(RuntimeError,'не завершилась за 5 минут'):updater.configure_initial_https(dict(host='vpn.example.com',mode='domain'))
 
     def test_ip_url_includes_brackets_and_certificate_warning(self):
         output=io.StringIO()
@@ -212,16 +216,23 @@ class UpdateTest(unittest.TestCase):
             data=root/'data';env=root/'panel.env'
             calls=[]
             def run(args,**kwargs):
+                self.assertIn('Подготовка установки панели',output.getvalue())
                 calls.append(args)
                 env.write_text('YPTUN_DATA='+str(data)+'\n')
                 return subprocess.CompletedProcess(args,0,'systemctl output\n'+json.dumps(dict(base_path='/abcdefghijklmnop',created=dict(username='admin',password='test-password')))+'\n')
             output=io.StringIO()
+            def health(values):
+                self.assertIn('Проверка запуска панели',output.getvalue())
+                calls.append(values)
+            def configure(address):
+                self.assertIn('Настройка HTTPS и выпуск сертификата',output.getvalue())
+                return dict(host=address['host'],mode=address['mode'])
             with patch.multiple(updater,SOURCE=source,ROOT=installed,DATA=data,ENV=env,
                                 NGINX=root/'nginx.conf',
                                 check_dependencies=lambda:None,run=run,
-                                health=lambda values:calls.append(values),
+                                health=health,
                                 prompt_address=lambda:dict(host='vpn.example.com',mode='domain'),
-                                configure_initial_https=lambda address:dict(host=address['host'],mode=address['mode'])), \
+                                configure_initial_https=configure), \
                  patch.object(updater.os,'geteuid',return_value=0),patch('sys.stdout',output):
                 updater.update('b'*40)
             self.assertEqual(calls[0][1],str(installed/'deploy'/'install.py'))

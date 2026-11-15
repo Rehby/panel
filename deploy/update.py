@@ -85,6 +85,7 @@ def prompt_address():
     spec.loader.exec_module(helper)
     try:
         with open('/dev/tty', 'r') as tty_input, open('/dev/tty', 'w') as tty_output:
+            tty_output.write('Введите домен или публичный IP без https:// и нажмите Enter.\n')
             while True:
                 tty_output.write('Домен или публичный IP панели: ')
                 tty_output.flush()
@@ -101,7 +102,10 @@ def prompt_address():
 
 
 def configure_initial_https(address):
-    result = subprocess.run([HTTPS_HELPER], input=json.dumps(address), capture_output=True, text=True, timeout=300)
+    try:
+        result = subprocess.run([HTTPS_HELPER], input=json.dumps(address), capture_output=True, text=True, timeout=300)
+    except subprocess.TimeoutExpired as error:
+        raise RuntimeError('Настройка HTTPS не завершилась за 5 минут. Проверьте службы; для домена также проверьте DNS и порты 80 и 443. Затем повторите установку.') from error
     if result.returncode:
         try:
             error = json.loads(result.stderr).get('error')
@@ -177,6 +181,7 @@ def update(revision):
     if updating:
         run(['systemctl', 'is-active', '--quiet', 'yptun-panel'])
     address = prompt_address() if not updating or not HTTPS_STATUS.exists() else None
+    print('Подготовка ' + ('обновления' if updating else 'установки') + ' панели…', flush=True)
 
     ROOT.parent.mkdir(parents=True, exist_ok=True)
     stage = Path(tempfile.mkdtemp(prefix='.yptun-stage-', dir=str(ROOT.parent)))
@@ -240,6 +245,7 @@ def update(revision):
                 print('Логин панели: ' + created['username'], flush=True)
                 print('Пароль панели: ' + created['password'], flush=True)
                 print('Сохраните пароль: повторно показать его нельзя.', flush=True)
+            print('Проверка запуска панели…', flush=True)
             health(environment())
     except Exception:
         if updating and stopped:
@@ -275,7 +281,11 @@ def update(revision):
     finally:
         if stage.exists():
             shutil.rmtree(stage)
-    status = configure_initial_https(address) if address else json.loads(HTTPS_STATUS.read_text())
+    if address:
+        print('Настройка HTTPS' + (' и выпуск сертификата Let’s Encrypt' if address['mode'] == 'domain' else ' с самоподписанным сертификатом') + ' (может занять несколько минут)…', flush=True)
+        status = configure_initial_https(address)
+    else:
+        status = json.loads(HTTPS_STATUS.read_text())
     print('Установлена версия ' + (ROOT / 'VERSION').read_text().strip() + ', ревизия ' + revision)
     if backup:
         print('Резервная копия базы: ' + str(backup) + '; предыдущая версия: ' + str(old))

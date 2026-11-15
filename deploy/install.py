@@ -14,6 +14,7 @@ def run(args,**kwargs):return subprocess.run(args,check=True,text=True,**kwargs)
 def install():
     if os.geteuid()!=0:raise SystemExit('Run as root')
     if not (ROOT/'server.py').exists():raise SystemExit('Copy the source to /opt/yptun-panel first')
+    print('Подготовка системного пользователя и данных панели…',file=sys.stderr,flush=True)
     if subprocess.run(['id','yptun'],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL).returncode:
         run(['useradd','--system','--home-dir','/var/lib/yptun-panel','--create-home','--shell','/usr/sbin/nologin','yptun'])
     run(['usermod','-aG','docker','yptun'])
@@ -31,7 +32,10 @@ def install():
     cover=Path('/var/www/yptun-cover');cover.mkdir(parents=True,exist_ok=True)
     (cover/'index.html').write_text('<!doctype html><html lang="en"><meta name="viewport" content="width=device-width"><title>Network services</title><style>body{font:17px system-ui;max-width:640px;margin:15vh auto;padding:24px;color:#263c32;background:#f4f6f1}h1{font-weight:500;font-size:40px}p{line-height:1.8;color:#6d8070}</style><h1>Network services</h1><p>Private infrastructure. Reliable connections.</p></html>')
     hook=Path('/etc/letsencrypt/renewal-hooks/deploy/yptun-nginx');hook.parent.mkdir(parents=True,exist_ok=True);hook.write_text('#!/bin/sh\n/usr/sbin/nginx -t && /usr/bin/systemctl reload nginx\n/usr/local/sbin/yptun-cert-sync\n');os.chmod(hook,0o755)
-    run(['systemctl','daemon-reload']);run(['systemctl','enable','--now','docker','nginx','certbot.timer']);run(['systemctl','enable','yptun-panel']);run(['systemctl','restart','yptun-panel'])
+    print('Запуск служб Docker, nginx и certbot.timer…',file=sys.stderr,flush=True)
+    run(['systemctl','daemon-reload']);run(['systemctl','enable','--now','docker','nginx','certbot.timer'])
+    print('Запуск панели…',file=sys.stderr,flush=True)
+    run(['systemctl','enable','yptun-panel']);run(['systemctl','restart','yptun-panel'])
     print(json.dumps(info))
 
 if __name__=='__main__':install()
