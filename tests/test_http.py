@@ -27,7 +27,10 @@ class HTTPTest(unittest.TestCase):
         c.request('GET' if data is None else 'POST',path,None if data is None else json.dumps(data),headers)
         r=c.getresponse();body=r.read();status=r.status;headers=dict(r.getheaders());c.close();return status,body,headers
     def test_end_to_end(self):
-        self.assertEqual(self.request('/')[0],200)
+        status,body,_=self.request('/')
+        self.assertEqual(status,200)
+        self.assertIn(b'<title>panel for YPtun</title>',body)
+        self.assertEqual(body.count(b'id="logout"'),1)
         status,body,headers=self.request('/qrcode.js')
         self.assertEqual(status,200)
         self.assertIn('text/javascript',headers['Content-Type'])

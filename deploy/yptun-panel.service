@@ -1,5 +1,5 @@
 [Unit]
-Description=YPtun Control Panel
+Description=panel for YPtun
 After=network.target docker.service
 Requires=docker.service
 

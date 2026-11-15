@@ -496,6 +496,6 @@ class Handler(BaseHTTPRequestHandler):
 if __name__=='__main__':
     os.umask(0o077);created=init()
     host=os.environ.get('YPTUN_HOST','127.0.0.1');port=int(os.environ.get('YPTUN_PORT','8080'))
-    print(f"YPtun Control: http://{host}:{port}{auth.CONFIG['base_path']}/",flush=True)
+    print(f"panel for YPtun: http://{host}:{port}{auth.CONFIG['base_path']}/",flush=True)
     if created:print('Создан администратор: '+created['username']+' / '+created['password'],flush=True)
     ThreadingHTTPServer((host,port),Handler).serve_forever()

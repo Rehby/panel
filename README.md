@@ -1,4 +1,4 @@
-# YPtun Control
+# panel for YPtun
 
 Русскоязычная панель для VPN-служб на одном Linux-сервере. Python 3.9+, Docker Engine / Compose v2, OpenSSL; Python/npm-зависимости не нужны. Форматы генераторов сверены с [YPtun](https://github.com/yanisplugg/yptun/tree/2a8f9517fa9a62fa2f50dcf1e57b41cec8c6d0cc).
 
