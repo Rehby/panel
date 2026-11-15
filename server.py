@@ -412,6 +412,7 @@ class Handler(BaseHTTPRequestHandler):
                 if not u or not wdtt.available(u):return self.send(404,dict(error='Подписка недоступна'))
                 s=get(u['service_id'],'service')
                 if s['protocol']!='wdtt':return self.send(404,{})
+                if not subscriptions.service_available(s):return self.send(404,dict(error='Подписка недоступна'))
                 return self.send(200,wdtt.subscription(s,u))
             if path=='/health':return self.send(200,dict(status='ok'))
             if path.startswith('/sub/'):
@@ -419,6 +420,7 @@ class Handler(BaseHTTPRequestHandler):
                 u=next((u for u in rows('user') if hmac.compare_digest(u['token'],token)),None)
                 if not u or not wdtt.available(u):return self.send(404,'Подписка недоступна','text/plain; charset=utf-8')
                 s=get(u['service_id'],'service')
+                if not subscriptions.service_available(s):return self.send(404,'Подписка недоступна','text/plain; charset=utf-8')
                 if s['protocol']=='wdtt':return self.send(200,wdtt.subscription(s,u))
                 body=profile(s,u)
                 if BY_ID[s['protocol']]['mode']=='native' and not body.lstrip().startswith('{'):body=base64.b64encode(body.encode()).decode()

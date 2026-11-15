@@ -32,12 +32,17 @@ def link(s,u):
     return text
 
 
+def service_available(service):
+    return service.get('desired') != 'stopped'
+
+
 def feed(person,connections,services,available):
     by_id={s['id']:s for s in services}
     links=[];unavailable=[]
     for u in connections:
-        if u.get('person_id')!=person['id'] or u['service_id'] not in by_id or not available(u):continue
-        try:links.append(link(by_id[u['service_id']],u))
+        service=by_id.get(u['service_id'])
+        if u.get('person_id')!=person['id'] or not service or not service_available(service) or not available(u):continue
+        try:links.append(link(service,u))
         except (ValueError,KeyError):unavailable.append(dict(name=u['name'],reason='Импортированный профиль требует совместимой ссылки YPtun'))
     result=dict(version=1,subscriptionName=person['name'],updatedAt=datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='seconds'),links=links)
     if unavailable:result['unavailableProfiles']=unavailable

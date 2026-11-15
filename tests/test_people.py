@@ -25,6 +25,8 @@ class PeopleTest(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory();self.previous=server.DATA
         server.DATA=Path(self.tmp.name);server.init()
+        self.compose_patch=patch.object(server,'compose',return_value='')
+        self.compose_patch.start();self.addCleanup(self.compose_patch.stop)
     def tearDown(self):
         server.DATA=self.previous;self.tmp.cleanup()
     def service(self,port=28443,**data):
@@ -32,7 +34,10 @@ class PeopleTest(unittest.TestCase):
     def person(self,name='Owner'):
         return server.mutate('/api/people',dict(name=name))
     def grant(self,p,s,**data):
-        return server.mutate('/api/people/'+p['id']+'/grant',dict(service_id=s['id'],**data))
+        access=server.mutate('/api/people/'+p['id']+'/grant',dict(service_id=s['id'],**data))
+        if server.get(s['id'],'service').get('desired')=='stopped':
+            server.mutate('/api/services/'+s['id']+'/start',{})
+        return access
     def feed(self,p):
         return subscriptions.feed(server.get(p['id'],'person'),server.rows('user'),server.rows('service'),wdtt.available)
 
@@ -61,6 +66,8 @@ class PeopleTest(unittest.TestCase):
         self.assertEqual(len(self.feed(p)['links']),1)
         self.assertNotIn(added['uuid'],json.dumps(self.feed(p)))
         server.mutate('/api/users/'+added['id']+'/toggle',{})
+        self.assertEqual(len(self.feed(p)['links']),1)
+        server.mutate('/api/services/'+second['id']+'/start',{})
         server.mutate('/api/users/'+first['id']+'/delete',{})
         self.assertEqual(len(self.feed(p)['links']),1)
         self.assertEqual(server.get(p['id'],'person')['token'],p['token'])
@@ -185,8 +192,10 @@ class PublicSubscriptionHTTPTest(unittest.TestCase):
     def tearDown(self):
         self.http.shutdown();self.http.server_close();server.DATA=self.previous;self.tmp.cleanup()
     def request(self,token):
+        return self.request_path('/subscription/'+token)
+    def request_path(self,path):
         connection=http.client.HTTPConnection('127.0.0.1',self.http.server_port)
-        connection.request('GET','/subscription/'+token)
+        connection.request('GET',path)
         result=connection.getresponse();body=result.read();status=result.status;headers=dict(result.getheaders());connection.close()
         return status,body,headers
     def test_public_feed_updates_in_place_and_old_token_is_revoked(self):
@@ -196,10 +205,43 @@ class PublicSubscriptionHTTPTest(unittest.TestCase):
         self.assertEqual(headers['Cache-Control'],'no-store');self.assertEqual(headers['Profile-Update-Interval'],'1')
         s=server.mutate('/api/services',dict(protocol='vless',name='Entry',host='vpn.example.com',port=28999,security='none'))
         server.mutate('/api/people/'+p['id']+'/grant',dict(service_id=s['id']))
+        with patch.object(server,'compose',return_value=''):
+            server.mutate('/api/services/'+s['id']+'/start',{})
         self.assertEqual(len(json.loads(self.request(p['token'])[1])['links']),1)
         server.mutate('/api/people/'+p['id']+'/rotate',{})
         self.assertEqual(self.request(p['token'])[0],404)
         self.assertEqual(self.request(server.get(p['id'],'person')['token'])[0],200)
         self.assertEqual(self.request('not-valid')[0],404)
+
+    def test_stopped_service_is_removed_and_returns_after_start(self):
+        person=server.mutate('/api/people',dict(name='Subscriber'))
+        services=[server.mutate('/api/services',dict(protocol='vless',name='Entry',host='vpn.example.com',port=port,security='none')) for port in (28997,28998)]
+        users=[server.mutate('/api/people/'+person['id']+'/grant',dict(service_id=s['id'])) for s in services]
+        self.assertEqual(json.loads(self.request(person['token'])[1])['links'],[])
+        with patch.object(server,'compose',return_value=''):
+            for service in services:server.mutate('/api/services/'+service['id']+'/start',{})
+            self.assertEqual(len(json.loads(self.request(person['token'])[1])['links']),2)
+            server.mutate('/api/services/'+services[0]['id']+'/stop',{})
+            links=json.loads(self.request(person['token'])[1])['links']
+            self.assertEqual(len(links),1)
+            self.assertNotIn(users[0]['uuid'],links[0])
+            self.assertIn(users[1]['uuid'],links[0])
+            server.mutate('/api/services/'+services[0]['id']+'/start',{})
+        links=json.loads(self.request(person['token'])[1])['links']
+        self.assertEqual(len(links),2)
+        self.assertTrue(any(users[0]['uuid'] in link for link in links))
+        self.assertEqual(server.get(person['id'],'person')['token'],person['token'])
+        self.assertEqual(server.get(users[0]['id'],'user')['uuid'],users[0]['uuid'])
+        with patch.object(server,'compose',side_effect=ValueError('Docker недоступен')):
+            with self.assertRaises(ValueError):server.mutate('/api/services/'+services[0]['id']+'/stop',{})
+        self.assertEqual(len(json.loads(self.request(person['token'])[1])['links']),2)
+
+    def test_legacy_turn_subscription_follows_service_state(self):
+        service=dict(id='turn',protocol='wdtt',host='vpn.example.com',port=56000,local_port=9000,desired='stopped')
+        user=dict(id='access',service_id='turn',token='a'*43,name='TURN',enabled=True,vk_hash='hash',password='secret')
+        server.put('service',service);server.put('user',user)
+        self.assertEqual(self.request_path('/turn-sub/'+user['token'])[0],404)
+        service['desired']='running';server.put('service',service)
+        self.assertEqual(self.request_path('/turn-sub/'+user['token'])[0],200)
 
 if __name__=='__main__':unittest.main()
