@@ -11,7 +11,7 @@ def inbound(location):
 
 
 def link(s,u):
-    name=s['name']+' · '+u['name']
+    name=u['name'] if u.get('auto_name') else s['name']+' · '+u['name']
     if s['protocol']=='wdtt':
         return inbound(dict(id=u['id'],name=name,engine='vkturn',vkturn=dict(core='wdtt',vk_link=u['vk_hash'].replace(',','\n'),listen_port=s['local_port'],wdtt_peer=s['host'],wdtt_port=s['port'],wdtt_password=u['password'],wdtt_workers=18)))
     text=profile(s,u).strip()

@@ -1,5 +1,6 @@
 import importlib.util
 import io
+import json
 import os
 from pathlib import Path
 import sqlite3
@@ -117,6 +118,36 @@ class InstallShellTest(unittest.TestCase):
 
 
 class UpdateTest(unittest.TestCase):
+    def test_address_prompt_uses_tty_and_validates_domain_and_ip(self):
+        class TTY:
+            def __init__(self,lines):self.lines=iter(lines);self.output=''
+            def __enter__(self):return self
+            def __exit__(self,*args):pass
+            def readline(self):return next(self.lines,'')
+            def write(self,text):self.output+=text
+            def flush(self):pass
+        tty=TTY(['bad/url\n','VPN.Example.com\n'])
+        with patch('builtins.open',return_value=tty) as opened:
+            self.assertEqual(updater.prompt_address(),dict(host='vpn.example.com',mode='domain'))
+        opened.assert_called_once_with('/dev/tty','r+')
+        self.assertIn('Укажите публичный',tty.output)
+        with patch('builtins.open',return_value=TTY(['2001:db8::1\n'])):
+            self.assertEqual(updater.prompt_address(),dict(host='2001:db8::1',mode='ip'))
+        with patch('builtins.open',side_effect=OSError('no tty')):
+            with self.assertRaisesRegex(RuntimeError,'терминал'):updater.prompt_address()
+
+    def test_https_helper_error_is_reported(self):
+        result=subprocess.CompletedProcess([],1,'','{"error":"certificate failed"}')
+        with patch.object(updater.subprocess,'run',return_value=result):
+            with self.assertRaisesRegex(RuntimeError,'certificate failed'):updater.configure_initial_https(dict(host='vpn.example.com',mode='domain'))
+
+    def test_ip_url_includes_brackets_and_certificate_warning(self):
+        output=io.StringIO()
+        with patch('sys.stdout',output):
+            updater.print_access(dict(host='2001:db8::1',mode='ip'),dict(base_path='/abcdefghijklmnop'))
+        self.assertIn('https://[2001:db8::1]/abcdefghijklmnop/',output.getvalue())
+        self.assertIn('самоподписанный',output.getvalue())
+
     def test_proxy_migration_preserves_existing_location(self):
         old='server {\n    location ^~ /turn-sub/ {\n        proxy_pass http://127.0.0.1:8080;\n    }\n}\n'
         result=updater.subscription_proxy_config(old)
@@ -141,15 +172,22 @@ class UpdateTest(unittest.TestCase):
             def run(args,**kwargs):
                 calls.append(args)
                 env.write_text('YPTUN_DATA='+str(data)+'\n')
+                return subprocess.CompletedProcess(args,0,'systemctl output\n'+json.dumps(dict(base_path='/abcdefghijklmnop',created=dict(username='admin',password='test-password')))+'\n')
+            output=io.StringIO()
             with patch.multiple(updater,SOURCE=source,ROOT=installed,DATA=data,ENV=env,
                                 NGINX=root/'nginx.conf',
                                 check_dependencies=lambda:None,run=run,
-                                health=lambda values:calls.append(values)), \
-                 patch.object(updater.os,'geteuid',return_value=0):
+                                health=lambda values:calls.append(values),
+                                prompt_address=lambda:dict(host='vpn.example.com',mode='domain'),
+                                configure_initial_https=lambda address:dict(host=address['host'],mode=address['mode'])), \
+                 patch.object(updater.os,'geteuid',return_value=0),patch('sys.stdout',output):
                 updater.update('b'*40)
             self.assertEqual(calls[0][1],str(installed/'deploy'/'install.py'))
             self.assertEqual(calls[1]['YPTUN_DATA'],str(data))
             self.assertEqual((installed/'.revision').read_text().strip(),'b'*40)
+            self.assertIn('URL панели: https://vpn.example.com/abcdefghijklmnop/',output.getvalue())
+            self.assertIn('Логин панели: admin',output.getvalue())
+            self.assertIn('Пароль панели: test-password',output.getvalue())
 
     def test_update_and_rollback_preserve_data(self):
         for fail in (False,True):
@@ -167,6 +205,8 @@ class UpdateTest(unittest.TestCase):
                     db.execute('create table items (value text)')
                     db.execute("insert into items values ('original')")
                 env=root/'panel.env';env.write_text('YPTUN_DATA='+str(data)+'\n')
+                https=root/'https.json';https.write_text(json.dumps(dict(host='vpn.example.com',mode='domain')))
+                deploy=root/'deploy.json';deploy.write_text(json.dumps(dict(base_path='/abcdefghijklmnop')))
                 helper=root/'helper';helper.write_text('old helper')
                 nginx=root/'nginx.conf'
                 old_nginx='server {\n    location ^~ /turn-sub/ {\n        proxy_pass http://127.0.0.1:8080;\n    }\n}\n'
@@ -180,7 +220,7 @@ class UpdateTest(unittest.TestCase):
                             db.execute("update items set value='changed'")
                         raise RuntimeError('health failed')
                 with patch.multiple(updater,SOURCE=source,ROOT=installed,DATA=data,ENV=env,
-                                    BACKUPS=root/'backups',NGINX=nginx,HELPERS=(('https-admin.py',str(helper)),),
+                                    BACKUPS=root/'backups',NGINX=nginx,HTTPS_STATUS=https,DEPLOY_CONFIG=deploy,HELPERS=(('https-admin.py',str(helper)),),
                                     check_dependencies=lambda:None,run=run,health=health), \
                      patch.object(updater.os,'geteuid',return_value=0):
                     if fail:

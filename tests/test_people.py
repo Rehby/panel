@@ -41,6 +41,25 @@ class PeopleTest(unittest.TestCase):
     def feed(self,p):
         return subscriptions.feed(server.get(p['id'],'person'),server.rows('user'),server.rows('service'),wdtt.available)
 
+    def test_automatic_connection_name_and_manual_edit(self):
+        p=self.person();s=self.service(country='nl',transport='xhttp')
+        s['self_sni']=True;server.put('service',s)
+        u=self.grant(p,s)
+        self.assertEqual(u['name'],'🇳🇱 VLESS · XHTTP · SELF')
+        self.assertEqual(urlsplit(self.feed(p)['links'][0]).fragment,'%F0%9F%87%B3%F0%9F%87%B1%20VLESS%20%C2%B7%20XHTTP%20%C2%B7%20SELF')
+        server.mutate('/api/users/'+u['id']+'/edit',dict(name='My phone'))
+        self.assertFalse(server.get(u['id'],'user')['auto_name'])
+        self.assertIn('My%20phone',self.feed(p)['links'][0])
+
+    def test_new_owner_name_is_separate_from_auto_connection(self):
+        s=self.service(country='us')
+        u=server.mutate('/api/users',dict(service_id=s['id'],new_person_name='Alice',auto_name=True))
+        self.assertEqual(u['name'],'🇺🇸 VLESS · TCP')
+        self.assertEqual(server.get(u['person_id'],'person')['name'],'Alice')
+        manual=self.grant(self.person(),s,name='Manual')
+        self.assertEqual(manual['name'],'Manual')
+        self.assertFalse(manual['auto_name'])
+
     def test_legacy_migration_is_idempotent_preserves_credentials_and_tokens(self):
         legacy=dict(id='legacy_access',name='Existing',service_id='old_service',token='a'*43,uuid=str(uuid.uuid4()),password='existing-password',enabled=True)
         server.put('user',legacy)

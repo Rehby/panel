@@ -1,3 +1,4 @@
+import base64
 import json
 import os
 import threading
@@ -7,8 +8,9 @@ import tempfile
 import time
 import unittest
 from unittest.mock import patch
+from urllib.parse import parse_qs,urlsplit
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
-import wdtt,server
+import wdtt,server,subscriptions
 
 class WDTTTest(unittest.TestCase):
  def setUp(self):
@@ -33,6 +35,18 @@ class WDTTTest(unittest.TestCase):
   with patch.object(wdtt,'request',return_value=dict(v,is_deactivated=True)) as core:
    server.mutate('/api/users/'+u['id']+'/toggle',{});self.assertEqual(core.call_args.args[1],'/deactivate')
   self.assertFalse(wdtt.available(server.get(u['id'],'user')))
+ def test_automatic_name_in_turn_subscription(self):
+  s=self.service();s['country']='NL';server.put('service',s)
+  p=server.mutate('/api/people',dict(name='Owner'))
+  view=dict(password='testpassword123',label='🇳🇱 VK-TURN / qWDTT',vk_hash='abc',expires_at=int(time.time())+86400,max_devices=1,is_deactivated=False)
+  with patch.object(wdtt,'request',return_value=view) as core:
+   u=server.mutate('/api/people/'+p['id']+'/grant',dict(service_id=s['id'],vk_hash='abc'))
+  self.assertEqual(core.call_args.args[2]['label'],view['label'])
+  self.assertEqual(u['name'],view['label'])
+  self.assertEqual(wdtt.subscription(s,u)['profiles'][0]['name'],view['label'])
+  encoded=parse_qs(urlsplit(subscriptions.link(s,u)).query)['d'][0]
+  decoded=json.loads(base64.urlsafe_b64decode(encoded+'='*(-len(encoded)%4)))
+  self.assertEqual(decoded['name'],view['label'])
  def test_api_failure_does_not_create_local_user(self):
   s=self.service()
   with patch.object(wdtt,'request',side_effect=ValueError('offline')):

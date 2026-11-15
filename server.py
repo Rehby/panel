@@ -3,6 +3,7 @@
 import base64
 import auth
 import defaults
+import geolocation
 import minimal
 import subscriptions
 import system_status
@@ -16,6 +17,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import secrets
 import shutil
 import sqlite3
@@ -174,6 +176,9 @@ def prepare_mutation(path,data):
 
 def prepare_service(data):
     s=dict(data)
+    country=str(s.get('country') or '').strip().upper()
+    if country and not re.fullmatch(r'[A-Z]{2}',country):raise ValueError('Код страны должен состоять из двух латинских букв')
+    s['country']=country
     if not s.get('image') and BY_ID.get(s.get('protocol'),{}).get('mode')=='custom':
         image=next(i for i in images.CATALOG if s['protocol'] in i['protocols'])
         s.update(image_id=image['id'],image=image['reference'],command=image.get('command',[]))
@@ -183,7 +188,7 @@ def prepare_service(data):
             if s.get(key) in (None,''):s[key]=preset[key]
     if not str(s.get('name') or '').strip():
         if s.get('protocol') not in BY_ID:raise ValueError('Неизвестный протокол')
-        s['name']=defaults.service_name(s['protocol'],s.get('transport'),s.get('self_sni',False))
+        s['name']=defaults.service_name(s['protocol'],s.get('transport'),s.get('self_sni',False),country)
     if s.get('self_sni'):
         status=https_status()
         if not status.get('self_sni_ready'):raise ValueError('Сначала настройте HTTPS по домену в разделе HTTPS и доступ')
@@ -246,9 +251,9 @@ def person_name(data):
     return name
 
 
-def save_access(u,person_id=None):
+def save_access(u,person_id=None,new_person_name=None):
     # The connection and its owner are attached in one SQLite transaction.
-    person=get(person_id,'person') if person_id else dict(id='person_'+u['id'],name=u['name'],token=u['token'],created=int(time.time()))
+    person=get(person_id,'person') if person_id else dict(id='person_'+u['id'],name=new_person_name or u['name'],token=u['token'],created=int(time.time()))
     u['person_id']=person['id']
     with db() as c:
         c.execute('INSERT OR REPLACE INTO objects VALUES (?,?,?)',(person['id'],'person',json.dumps(person)))
@@ -289,7 +294,7 @@ def mutate(path,data):
         person=get(id,'person')
         if action=='edit':person['name']=person_name(data);put('person',person);return person
         if action=='rotate':person['token']=secrets.token_urlsafe(32);put('person',person);return person
-        if action=='grant':return mutate('/api/users',dict(data,person_id=id,name=data.get('name') or person['name']))
+        if action=='grant':return mutate('/api/users',dict(data,person_id=id))
         if action=='delete':
             if any(u.get('person_id')==id for u in rows('user')):raise ValueError('Сначала удалите подключения пользователя')
             remove(id);return {}
@@ -325,16 +330,23 @@ def mutate(path,data):
         if not id:
             if data.get('person_id'):get(data['person_id'],'person')
             s=get(data.get('service_id',''),'service')
+            data=dict(data)
+            automatic=data.get('auto_name') is True or (bool(data.get('person_id')) and not str(data.get('name') or '').strip())
+            if automatic:
+                country=str(data.get('country') or s.get('country') or '').strip().upper()
+                if country and not re.fullmatch(r'[A-Z]{2}',country):raise ValueError('Код страны должен состоять из двух латинских букв')
+                data['name']=defaults.service_name(s['protocol'],s.get('transport'),s.get('self_sni',False),country)
+            new_person_name=person_name(dict(name=data['new_person_name'])) if not data.get('person_id') and 'new_person_name' in data else None
             if s['protocol']=='wdtt':
                 require_turn_slot(s)
                 view=turn_request(s,data=wdtt.user_fields(s,data))
-                u=wdtt.apply_view(dict(id=secrets.token_hex(8),name=data['name'],service_id=s['id'],token=secrets.token_urlsafe(32)),view)
-                try:save_access(u,data.get('person_id'))
+                u=wdtt.apply_view(dict(id=secrets.token_hex(8),name=data['name'],service_id=s['id'],token=secrets.token_urlsafe(32),auto_name=automatic),view)
+                try:save_access(u,data.get('person_id'),new_person_name)
                 except Exception:turn_request(s,'/delete',dict(password=u['password']));raise
                 event('Выдан доступ TURN: '+u['name']);return u
             if not str(data.get('name','')).strip() or len(data['name'])>100:raise ValueError('Укажите имя пользователя до 100 символов')
             if s['protocol']=='shadowsocks' and members(s['id']):raise ValueError('Shadowsocks: создайте отдельную службу для второго пользователя')
-            u=dict(id=secrets.token_hex(8),name=data['name'],service_id=s['id'],enabled=True,token=secrets.token_urlsafe(32),profile=data.get('profile',''),**credential())
+            u=dict(id=secrets.token_hex(8),name=data['name'],service_id=s['id'],enabled=True,token=secrets.token_urlsafe(32),profile=data.get('profile',''),auto_name=automatic,**credential())
             if s.get('provisioned'):
                 u['vk_hash']=data.get('vk_hash','')
                 u=provision.user(s,u,members(s['id']))
@@ -350,7 +362,7 @@ def mutate(path,data):
             try:subscriptions.link(s,u)
             except ValueError:
                 if BY_ID[s['protocol']]['mode']=='custom':raise
-            save_access(u,data.get('person_id'))
+            save_access(u,data.get('person_id'),new_person_name)
             try:sync(s)
             except Exception:
                 remove(u['id'])
@@ -373,11 +385,13 @@ def mutate(path,data):
                 if action=='edit' and u.get('expires_at',0) and u['expires_at']<=time.time():
                     fields.pop('password',None);view=turn_request(s,data=fields)
                 else:view=turn_request(s,path,fields)
+                if action=='edit' and data.get('name')!=u['name']:u['auto_name']=False
                 u=wdtt.apply_view(u,view);put('user',u)
             else:raise ValueError('Неизвестное действие TURN')
             event('Доступ TURN '+u['name']+': '+action);return {}
         if action=='edit':
             old=dict(u);u['name']=person_name(data)
+            if u['name']!=old['name']:u['auto_name']=False
             if data.get('uuid'):
                 if s['protocol'] not in ('vless','vmess','warp'):raise ValueError('UUID доступен для VLESS и VMess')
                 try:u['uuid']=str(uuid.UUID(data['uuid']))
@@ -538,7 +552,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(200,{},headers={'Set-Cookie':self.cookie('',0)})
             if not self.auth():return self.send(401,dict(error='Требуется вход'))
             data=prepare_mutation(path,data)
-            with LOCK:result=mutate(path,data)
+            if path=='/api/country':result=dict(country=geolocation.country(data.get('host'),DATA/'geoip'))
+            else:
+                with LOCK:result=mutate(path,data)
             self.send(200,result)
         except (ValueError,KeyError,TypeError,subprocess.SubprocessError) as e:self.send(400,dict(error=str(e)))
         except Exception:self.send(500,dict(error='Не удалось выполнить операцию; проверьте хранилище и Docker'))

@@ -6,12 +6,13 @@ from images import CATALOG
 from transports import ALIASES
 
 
-def service_name(protocol,transport='tcp',self_sni=False):
+def service_name(protocol,transport='tcp',self_sni=False,country=''):
     name=BY_ID[protocol]['name']
     if protocol=='vless':
         transport=ALIASES.get(transport or 'tcp',transport or 'tcp')
         name+=' · '+transport.upper()
         if self_sni:name+=' · SELF'
+    if country:name=''.join(chr(0x1f1e6+ord(c)-ord('A')) for c in country)+' '+name
     return name
 
 def free_port(protocol,reserved):

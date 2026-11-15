@@ -23,6 +23,7 @@ const context=vm.createContext({
  setTimeout(){},setInterval(){},console,
 });
 vm.runInContext(fs.readFileSync(path.join(__dirname,'../static/app.js'),'utf8'),context);
+assert.equal(vm.runInContext(`state.protocols=[{id:'vless',name:'VLESS'}];connectionName({protocol:'vless',transport:'xhttp',self_sni:true},'NL')`,context),'🇳🇱 VLESS · XHTTP · SELF');
 
 (async()=>{
  await vm.runInContext(`state={services:[{id:'s',protocol:'vless'}],users:[{id:'u',name:'User',service_id:'s',person_id:'p'}],people:[{id:'p',name:'User',token:'secret-token'}],protocols:[],events:[]};

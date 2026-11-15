@@ -138,7 +138,7 @@ def profile(s,u):
     if s.get('provisioned'):return provision.profile(s,u)
     if s['protocol']=='wdtt':return wdtt.link(s,u)
     p=s['protocol']; host=s['host']; host='['+host+']' if ':' in host else host
-    addr=f"{host}:{s['port']}"; label=quote(s['name']+' · '+u['name'])
+    addr=f"{host}:{s['port']}"; label=quote(u['name'] if u.get('auto_name') else s['name']+' · '+u['name'])
     if BY_ID[p]['mode']=='custom':
         if not u.get('profile','').strip(): raise ValueError('Для этого движка добавьте клиентскую ссылку или конфиг пользователя')
         return u['profile']
@@ -162,5 +162,5 @@ def profile(s,u):
     if p=='shadowsocks':
         auth=base64.urlsafe_b64encode((s.get('method','chacha20-ietf-poly1305')+':'+u['password']).encode()).decode().rstrip('=')
         return f'ss://{auth}@{addr}#{label}'
-    data=dict(v='2',ps=s['name'],add=s['host'],port=str(s['port']),id=u['uuid'],aid='0',scy='auto',net=s['transport'],type='none',host=s['sni'],path=s['path'].strip('/') if s['transport']=='grpc' else s['path'],tls='tls' if s['security']=='tls' else '',sni=s['sni'],fp=s.get('fingerprint','chrome'))
+    data=dict(v='2',ps=u['name'] if u.get('auto_name') else s['name'],add=s['host'],port=str(s['port']),id=u['uuid'],aid='0',scy='auto',net=s['transport'],type='none',host=s['sni'],path=s['path'].strip('/') if s['transport']=='grpc' else s['path'],tls='tls' if s['security']=='tls' else '',sni=s['sni'],fp=s.get('fingerprint','chrome'))
     return 'vmess://'+base64.b64encode(json.dumps(data).encode()).decode()

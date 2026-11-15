@@ -2,6 +2,7 @@
 """Install or update the panel while retaining its separate state directory."""
 import json
 import fcntl
+import importlib.util
 import os
 from pathlib import Path
 import re
@@ -21,6 +22,9 @@ DATA = Path('/var/lib/yptun-panel')
 ENV = Path('/etc/yptun-panel.env')
 BACKUPS = Path('/var/backups/yptun-panel')
 NGINX = Path('/etc/nginx/conf.d/yptun-panel.conf')
+HTTPS_STATUS = Path('/etc/yptun-panel/https.json')
+DEPLOY_CONFIG = Path('/etc/yptun-panel/deploy.json')
+HTTPS_HELPER = '/usr/local/sbin/yptun-https'
 HELPERS = (('https-admin.py', '/usr/local/sbin/yptun-https'),
            ('cert-sync.py', '/usr/local/sbin/yptun-cert-sync'))
 
@@ -75,6 +79,51 @@ def check_dependencies():
             raise RuntimeError('Не найдена зависимость: ' + command)
     run(['docker', 'compose', 'version'], stdout=subprocess.DEVNULL)
 
+def prompt_address():
+    spec = importlib.util.spec_from_file_location('yptun_https_admin', Path(__file__).with_name('https-admin.py'))
+    helper = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(helper)
+    try:
+        tty = open('/dev/tty', 'r+')
+    except OSError as error:
+        raise RuntimeError('Для ввода домена или IP нужен интерактивный терминал') from error
+    with tty:
+        while True:
+            tty.write('Домен или публичный IP панели: ')
+            tty.flush()
+            value = tty.readline()
+            if not value:
+                raise RuntimeError('Адрес панели не указан')
+            try:
+                host, is_ip = helper.hostname(value.strip())
+                return dict(host=host, mode='ip' if is_ip else 'domain')
+            except ValueError as error:
+                tty.write(str(error) + '\n')
+
+
+def configure_initial_https(address):
+    result = subprocess.run([HTTPS_HELPER], input=json.dumps(address), capture_output=True, text=True, timeout=300)
+    if result.returncode:
+        try:
+            error = json.loads(result.stderr).get('error')
+        except (json.JSONDecodeError, AttributeError):
+            error = result.stderr.strip()
+        raise RuntimeError('Не удалось настроить HTTPS: ' + (error or 'ошибка helper') +
+                           '. Исправьте причину и повторите установку.')
+    return json.loads(result.stdout)
+
+
+def print_access(status, info):
+    host = status['host']
+    if ':' in host:
+        host = '[' + host + ']'
+    prefix = info['base_path']
+    if not re.fullmatch(r'/[A-Za-z0-9_-]{16,100}', prefix):
+        raise ValueError('Некорректный путь панели')
+    print('URL панели: https://' + host + prefix + '/', flush=True)
+    if status.get('mode') == 'ip':
+        print('Сертификат самоподписанный: необходимо добавить его в доверенные.', flush=True)
+
 
 def subscription_proxy_config(text):
     if re.search(r'(?m)^[ \t]*location\s+(?:\^~\s+)?/subscription/\s*\{', text):
@@ -128,6 +177,7 @@ def update(revision):
         raise RuntimeError('Нестандартный YPTUN_DATA: автоматическое обновление остановлено')
     if updating:
         run(['systemctl', 'is-active', '--quiet', 'yptun-panel'])
+    address = prompt_address() if not updating or not HTTPS_STATUS.exists() else None
 
     ROOT.parent.mkdir(parents=True, exist_ok=True)
     stage = Path(tempfile.mkdtemp(prefix='.yptun-stage-', dir=str(ROOT.parent)))
@@ -179,11 +229,19 @@ def update(revision):
             run(['systemctl', 'start', 'yptun-panel'])
             health(values)
         else:
-            run([sys.executable, str(ROOT / 'deploy' / 'install.py')])
+            result = run([sys.executable, str(ROOT / 'deploy' / 'install.py')], stdout=subprocess.PIPE, text=True)
+            lines = result.stdout.splitlines()
+            if not lines:
+                raise RuntimeError('Установщик не вернул данные доступа панели')
+            if len(lines) > 1:
+                print('\n'.join(lines[:-1]), flush=True)
+            info = json.loads(lines[-1])
+            created = info.get('created')
+            if created:
+                print('Логин панели: ' + created['username'], flush=True)
+                print('Пароль панели: ' + created['password'], flush=True)
+                print('Сохраните пароль: повторно показать его нельзя.', flush=True)
             health(environment())
-        print('Установлена версия ' + (ROOT / 'VERSION').read_text().strip() + ', ревизия ' + revision)
-        if backup:
-            print('Резервная копия базы: ' + str(backup) + '; предыдущая версия: ' + str(old))
     except Exception:
         if updating and stopped:
             try:
@@ -218,6 +276,14 @@ def update(revision):
     finally:
         if stage.exists():
             shutil.rmtree(stage)
+    status = configure_initial_https(address) if address else json.loads(HTTPS_STATUS.read_text())
+    print('Установлена версия ' + (ROOT / 'VERSION').read_text().strip() + ', ревизия ' + revision)
+    if backup:
+        print('Резервная копия базы: ' + str(backup) + '; предыдущая версия: ' + str(old))
+    if updating:
+        info = json.loads(DEPLOY_CONFIG.read_text())
+        print('Логин и пароль панели остались прежними.', flush=True)
+    print_access(status, info)
 
 
 if __name__ == '__main__':

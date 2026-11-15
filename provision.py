@@ -217,13 +217,13 @@ def tt_link(s,u):
         return varint(tag)+varint(len(v))+v
     host='['+s['host']+']' if ':' in s['host'] else s['host']
     cert=b''.join(base64.b64decode(block) for block in re.findall(r'-----BEGIN CERTIFICATE-----\s*(.*?)\s*-----END CERTIFICATE-----',s['certificate'],re.S))
-    payload=b''.join(tlv(t,v) for t,v in [(0,b'\x01'),(1,s['sni']),(2,host+':'+str(s['port'])),(5,u['id']),(6,u['password']),(8,cert),(12,s['name']+' · '+u['name'])])
+    payload=b''.join(tlv(t,v) for t,v in [(0,b'\x01'),(1,s['sni']),(2,host+':'+str(s['port'])),(5,u['id']),(6,u['password']),(8,cert),(12,u['name'] if u.get('auto_name') else s['name']+' · '+u['name'])])
     return 'tt://?'+base64.urlsafe_b64encode(payload).decode().rstrip('=')
 
 def profile(s,u):
     p=s['protocol'];host='['+s['host']+']' if ':' in s['host'] else s['host'];addr=host+':'+str(s['port'])
     if p in ('wireguard','amneziawg'):return wg_client(s,u)
-    if p=='snolc':return 'snolc://'+addr+'?key='+base64.b64decode(s['server_public']).hex()+'#'+quote(s['name']+' · '+u['name'])
+    if p=='snolc':return 'snolc://'+addr+'?key='+base64.b64decode(s['server_public']).hex()+'#'+quote(u['name'] if u.get('auto_name') else s['name']+' · '+u['name'])
     if p=='masterdns':return 'masterdns://v1?'+urlencode(dict(domains=s['dns_domain'],key=s['engine_key'],enc=5,resolvers=addr))+'#'+quote(u['name'])
     if p=='trusttunnel':return tt_link(s,u)
     if p=='openflux':
@@ -235,5 +235,5 @@ def profile(s,u):
         # TURN transport is tcp/udp; DTLS runs inside it and is not a valid value.
         config=dict(v=1,provider='vk',peer=addr,transport='tcp',mode='udp',obf='rtpopus',key=s['engine_key'],listen='127.0.0.1:9000',wg=wg_client(s,u,'127.0.0.1:9000'),vk=u['vk_hash'],name=u['name'])
         return 'freeturn://'+b64(json.dumps(config,separators=(',',':')))
-    if p=='warp':return f'vless://{u["uuid"]}@{addr}?type=tcp&security=reality&encryption=none&sni={s["sni"]}&fp=chrome&pbk={base64.urlsafe_b64encode(base64.b64decode(s["server_public"])).decode().rstrip("=")}&sid={s["short_id"]}#'+quote(s['name']+' · '+u['name'])
+    if p=='warp':return f'vless://{u["uuid"]}@{addr}?type=tcp&security=reality&encryption=none&sni={s["sni"]}&fp=chrome&pbk={base64.urlsafe_b64encode(base64.b64decode(s["server_public"])).decode().rstrip("=")}&sid={s["short_id"]}#'+quote(u['name'] if u.get('auto_name') else s['name']+' · '+u['name'])
     raise ValueError('Нет генератора профиля')
