@@ -15,14 +15,18 @@ YPTUN_ALLOW_DOCKER=1 python3 -B server.py
 
 ## Установка и обновление через curl
 
-На Linux с systemd заранее установите Python 3.9+, curl, Docker Engine с Compose v2, nginx, certbot, sudo и OpenSSL. Нужны команды `useradd`, `usermod`, `runuser`, `visudo` и службы `docker`, `nginx`, `certbot.timer`. Для шаблона nginx требуется версия с поддержкой `http2 on`. На сервере выполните:
+На Linux с работающим systemd и установленными Bash и curl выполните:
 
 ```sh
 set -o pipefail
 curl -fsSL https://raw.githubusercontent.com/Rehby/panel/main/deploy/install.sh | sudo bash
 ```
 
-Одна и та же команда устанавливает панель или обновляет её до текущего коммита `main`. Установщик скачивает архив конкретной ревизии по HTTPS. При первой установке запишите выведенные путь, логин и пароль; после этого настройте HTTPS для домена, указывающего на сервер, например:
+Для первой установки без `sudo` выполните команду от root, заменив `sudo bash` на `bash`.
+
+Одна и та же команда устанавливает панель или обновляет её до текущего коммита `main`. На Debian/Ubuntu установщик добавляет недостающие пакеты через apt, включая Python 3.9+, Docker, nginx с HTTP/2, certbot, sudo, OpenSSL, Git и системные утилиты. Существующий Docker не заменяется. При отсутствии Compose v2 устанавливается проверенный по SHA-256 официальный плагин для x86_64 или arm64 (его нужно обновлять вручную). Для других дистрибутивов или архитектур необходимые компоненты следует установить вручную. Установщик проверяет systemd, HTTP/2 и службы `docker`, `nginx`, `certbot.timer`.
+
+Установщик скачивает архив конкретной ревизии по HTTPS. При первой установке запишите выведенные путь, логин и пароль; после этого настройте HTTPS для домена, указывающего на сервер, например:
 
 ```sh
 printf '%s\n' '{"host":"vpn.example.com","mode":"domain"}' | sudo /usr/local/sbin/yptun-https

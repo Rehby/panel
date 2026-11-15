@@ -43,24 +43,77 @@ class ArchiveTest(unittest.TestCase):
 
 
 class InstallShellTest(unittest.TestCase):
-    def test_bootstrap_cleanup_and_download_failure(self):
+    def run_installer(self,root,**options):
         script=Path(__file__).resolve().parents[1]/'deploy'/'install.sh'
+        binpath=root/'bin';binpath.mkdir()
+        def fake(name,body):
+            target=binpath/name;target.write_text('#!/bin/sh\n'+body+'\n');target.chmod(0o755)
+        fake('id','echo 0')
+        fake('uname','[ "$1" = -m ] && echo x86_64 || echo Linux')
+        fake('systemctl','[ "$FAIL_SYSTEMD" != 1 ]')
+        fake('nginx','echo "configure arguments: --with-http_v2_module" >&2')
+        fake('docker','[ "$COMPOSE_MISSING" != 1 ] || [ -f "$COMPOSE_READY" ]')
+        fake('python3','[ "$1" = -c ] && exit 0\nprintf "%s" "$1" > "$MARKER"')
+        fake('curl','printf "%s\\n" "$*" >> "$CALLS"\n[ "$FAIL_CURL" = 1 ] && exit 22\nfor arg do last="$arg"; done\nprintf bootstrap > "$last"')
+        fake('apt-get','printf "apt-get %s\\n" "$*" >> "$CALLS"\n[ "$FAIL_APT" = 1 ] && exit 1\n[ "$1" != install ] || /bin/cp "$FAKE_BIN/certbot-template" "$FAKE_BIN/certbot"')
+        fake('sha256sum','/bin/cat >/dev/null\n[ "$FAIL_CHECKSUM" != 1 ]')
+        fake('install','printf "install %s\\n" "$*" >> "$CALLS"\n[ "$1" = -d ] || /usr/bin/touch "$COMPOSE_READY"')
+        for name in ('sudo','visudo','useradd','usermod','runuser','openssl','git','ip','update-ca-certificates','certbot-template'):
+            fake(name,'exit 0')
+        if not options.get('missing_certbot'):fake('certbot','exit 0')
+        for name,target in (('mktemp','/usr/bin/mktemp'),('rm','/bin/rm'),('grep','/usr/bin/grep')):
+            (binpath/name).symlink_to(target)
+        env=dict(os.environ,PATH=str(binpath),TMPDIR=str(root),MARKER=str(root/'called'),
+                 FAKE_BIN=str(binpath),CALLS=str(root/'calls'),COMPOSE_READY=str(root/'compose-ready'),
+                 FAIL_CURL=str(int(options.get('fail_curl',False))),FAIL_APT=str(int(options.get('fail_apt',False))),
+                 FAIL_CHECKSUM=str(int(options.get('fail_checksum',False))),FAIL_SYSTEMD=str(int(options.get('fail_systemd',False))),
+                 COMPOSE_MISSING=str(int(options.get('compose_missing',False))))
+        return subprocess.run(['/bin/bash',str(script)],env=env,capture_output=True,text=True)
+
+    def test_bootstrap_cleanup_and_download_failure(self):
         for fail in (False,True):
             with self.subTest(fail=fail), tempfile.TemporaryDirectory() as directory:
                 root=Path(directory)
-                binpath=root/'bin';binpath.mkdir()
-                curl=binpath/'curl'
-                curl.write_text('#!/bin/sh\n[ "$FAIL_CURL" = 1 ] && exit 22\nfor arg do last="$arg"; done\nprintf bootstrap > "$last"\n')
-                python=binpath/'python3'
-                python.write_text('#!/bin/sh\nprintf "%s" "$1" > "$MARKER"\n')
-                curl.chmod(0o755);python.chmod(0o755)
-                marker=root/'called'
-                env=dict(os.environ,PATH=str(binpath)+':'+os.defpath,TMPDIR=str(root),
-                         FAIL_CURL='1' if fail else '0',MARKER=str(marker))
-                result=subprocess.run(['/bin/bash',str(script)],env=env,capture_output=True)
+                result=self.run_installer(root,fail_curl=fail)
                 self.assertEqual(result.returncode,22 if fail else 0)
-                self.assertEqual(marker.exists(),not fail)
+                self.assertEqual((root/'called').exists(),not fail)
                 self.assertEqual(list(root.glob('yptun-bootstrap.*')),[])
+                self.assertNotIn('apt-get', (root/'calls').read_text())
+
+    def test_installs_only_missing_packages_and_stops_on_apt_failure(self):
+        for fail in (False,True):
+            with self.subTest(fail=fail),tempfile.TemporaryDirectory() as directory:
+                root=Path(directory);result=self.run_installer(root,missing_certbot=True,fail_apt=fail)
+                self.assertEqual(result.returncode,1 if fail else 0,result.stderr)
+                calls=(root/'calls').read_text()
+                self.assertIn('apt-get update',calls)
+                self.assertEqual((root/'called').exists(),not fail)
+                if not fail:self.assertIn('apt-get install -y --no-install-recommends certbot',calls)
+
+    def test_compose_checksum_failure_prevents_install(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);result=self.run_installer(root,compose_missing=True,fail_checksum=True)
+            self.assertNotEqual(result.returncode,0)
+            self.assertIn('docker-compose-linux-x86_64',(root/'calls').read_text())
+            self.assertFalse((root/'compose-ready').exists())
+            self.assertFalse((root/'called').exists())
+            self.assertEqual(list(root.glob('yptun-compose.*')),[])
+
+    def test_installs_compose_plugin_after_checksum(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);result=self.run_installer(root,compose_missing=True)
+            self.assertEqual(result.returncode,0,result.stderr)
+            self.assertTrue((root/'compose-ready').exists())
+            self.assertTrue((root/'called').exists())
+            self.assertIn('docker-compose-linux-x86_64',(root/'calls').read_text())
+            self.assertEqual(list(root.glob('yptun-compose.*')),[])
+
+    def test_fails_without_systemd_before_installing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);result=self.run_installer(root,fail_systemd=True)
+            self.assertNotEqual(result.returncode,0)
+            self.assertIn('systemd',result.stderr)
+            self.assertFalse((root/'calls').exists())
 
 
 class UpdateTest(unittest.TestCase):

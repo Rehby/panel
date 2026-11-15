@@ -43,11 +43,10 @@ def nginx_config(host,prefix,cert=None,key=None):
     ssl_certificate_key {key};
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_session_tickets off;
-    http2 on;
 '''
     return http+f'''server {{
-    listen 443 ssl;
-    listen [::]:443 ssl;
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
     server_name {host};
     {tls}
     client_max_body_size 16m;
@@ -72,7 +71,7 @@ def nginx_config(host,prefix,cert=None,key=None):
     location / {{ root /var/www/yptun-cover; try_files $uri $uri/ =404; }}
 }}
 server {{
-    listen 127.0.0.1:9443 ssl;
+    listen 127.0.0.1:9443 ssl http2;
     server_name {host};
     {tls}
     root /var/www/yptun-cover;
