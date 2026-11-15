@@ -4,3 +4,4 @@
 
 input[type=checkbox]{display:inline-block;width:auto;margin:0 7px 0 0;vertical-align:middle;accent-color:var(--green)}button:disabled{cursor:not-allowed}
 .system-value{font-size:16px;font-weight:550;margin:13px 0 6px;overflow-wrap:anywhere}
+.share-section{border:1px solid var(--line);border-radius:8px;padding:16px;margin-bottom:16px}.share-section>strong{font-size:12px}.share-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}.share-qr{width:min(100%,360px);margin:16px auto 0}.share-qr svg{display:block;width:100%;height:auto}.share-section .code{margin:14px 0 0}

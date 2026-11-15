@@ -28,6 +28,10 @@ class HTTPTest(unittest.TestCase):
         r=c.getresponse();body=r.read();status=r.status;headers=dict(r.getheaders());c.close();return status,body,headers
     def test_end_to_end(self):
         self.assertEqual(self.request('/')[0],200)
+        status,body,headers=self.request('/qrcode.js')
+        self.assertEqual(status,200)
+        self.assertIn('text/javascript',headers['Content-Type'])
+        self.assertIn(b'qrcode',body)
         self.assertEqual(self.request('/',raw=True)[0],404)
         self.assertEqual(self.request('/api/state',raw=True)[0],404)
         self.assertEqual(self.request('/api/state')[0],401)

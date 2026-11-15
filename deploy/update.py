@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import time
+from urllib.parse import urlsplit
 import urllib.request
 
 SOURCE = Path(__file__).resolve().parent.parent
@@ -19,6 +20,7 @@ ROOT = Path('/opt/yptun-panel')
 DATA = Path('/var/lib/yptun-panel')
 ENV = Path('/etc/yptun-panel.env')
 BACKUPS = Path('/var/backups/yptun-panel')
+NGINX = Path('/etc/nginx/conf.d/yptun-panel.conf')
 HELPERS = (('https-admin.py', '/usr/local/sbin/yptun-https'),
            ('cert-sync.py', '/usr/local/sbin/yptun-cert-sync'))
 
@@ -74,6 +76,40 @@ def check_dependencies():
     run(['docker', 'compose', 'version'], stdout=subprocess.DEVNULL)
 
 
+def subscription_proxy_config(text):
+    if re.search(r'(?m)^[ \t]*location\s+(?:\^~\s+)?/subscription/\s*\{', text):
+        return None
+    blocks = list(re.finditer(r'(?m)^[ \t]*location\s+\^~\s+/turn-sub/\s*\{([^{}]*)\}', text))
+    if len(blocks) != 1:
+        raise ValueError('Не найден единственный маршрут /turn-sub/; настройте /subscription/ в nginx вручную')
+    block = blocks[0]
+    directives = [item.strip() for item in block.group(1).split(';') if item.strip()]
+    proxy = [item.split(None, 1)[1] for item in directives if re.match(r'^proxy_pass\s+\S+$', item)]
+    allowed = re.compile(r'^proxy_set_header\s+(?:Host|X-Real-IP|X-Forwarded-Proto)\s+\S+$')
+    if len(proxy) != 1 or any(not re.fullmatch(r'proxy_pass\s+\S+', item) and not allowed.fullmatch(item) for item in directives):
+        raise ValueError('Нестандартный маршрут /turn-sub/; настройте /subscription/ в nginx вручную')
+    target = urlsplit(proxy[0])
+    if (target.scheme != 'http' or target.hostname not in ('127.0.0.1', 'localhost', '::1')
+            or target.path or target.query or target.fragment
+            or target.username is not None or target.password is not None):
+        raise ValueError('Нестандартный proxy_pass; настройте /subscription/ в nginx вручную')
+    new_block = block.group(0).replace('/turn-sub/', '/subscription/', 1)
+    return text[:block.start()] + new_block + '\n' + text[block.start():]
+
+
+def write_nginx(text):
+    stat = NGINX.stat()
+    fd, name = tempfile.mkstemp(prefix='.yptun-nginx-', dir=str(NGINX.parent))
+    try:
+        with os.fdopen(fd, 'w') as stream:
+            stream.write(text)
+        os.chmod(name, stat.st_mode & 0o777)
+        os.chown(name, stat.st_uid, stat.st_gid)
+        os.replace(name, NGINX)
+    finally:
+        Path(name).unlink(missing_ok=True)
+
+
 def update(revision):
     if os.geteuid() != 0:
         raise SystemExit('Запустите установщик от root')
@@ -99,6 +135,7 @@ def update(revision):
     backup = None
     stopped = False
     swapped = False
+    nginx_changed = False
     try:
         shutil.copytree(SOURCE, stage, dirs_exist_ok=True)
         (stage / '.revision').write_text(revision + '\n')
@@ -112,6 +149,13 @@ def update(revision):
                 if not path.is_file() or path.is_symlink():
                     raise RuntimeError('Не найден штатный helper: ' + target)
                 shutil.copy2(path, backup / path.name)
+            nginx_update = None
+            if NGINX.exists():
+                if NGINX.is_symlink():
+                    raise RuntimeError('Конфигурация nginx является ссылкой; настройте /subscription/ вручную')
+                nginx_update = subscription_proxy_config(NGINX.read_text())
+                if nginx_update is not None:
+                    shutil.copy2(NGINX, backup / 'nginx.conf')
             dbpath = DATA / 'panel.sqlite3'
             if not dbpath.is_file():
                 raise RuntimeError('Не найдена база данных панели')
@@ -127,6 +171,11 @@ def update(revision):
             for name, target in HELPERS:
                 shutil.copyfile(ROOT / 'deploy' / name, target)
                 os.chmod(target, 0o755)
+            if nginx_update is not None:
+                nginx_changed = True
+                write_nginx(nginx_update)
+                run(['nginx', '-t'])
+                run(['systemctl', 'reload', 'nginx'])
             run(['systemctl', 'start', 'yptun-panel'])
             health(values)
         else:
@@ -144,6 +193,10 @@ def update(revision):
                     ROOT.rename(failed)
                 if old and old.exists():
                     old.rename(ROOT)
+                if nginx_changed:
+                    write_nginx((backup / 'nginx.conf').read_text())
+                    run(['nginx', '-t'])
+                    run(['systemctl', 'reload', 'nginx'])
                 for _, target in HELPERS:
                     saved = backup / Path(target).name
                     if saved.exists():

@@ -461,9 +461,9 @@ class Handler(BaseHTTPRequestHandler):
                                     if u['enabled']:z.writestr('clients/'+u['id']+'.txt',profile(s,u))
                             return self.send(200,out.getvalue(),'application/zip',{'Content-Disposition':'attachment; filename="yptun-'+s['id']+'.zip"'})
                     return self.send(404,dict(error='API не найден'))
-            asset={'/':'index.html','/app.js':'app.js','/style.css':'style.css'}.get(path)
+            asset={'/':'index.html','/app.js':'app.js','/qrcode.js':'qrcode.js','/style.css':'style.css'}.get(path)
             if not asset:return self.send(404,'Не найдено','text/plain')
-            return self.send(200,(ROOT/'static'/asset).read_bytes(),{'index.html':'text/html; charset=utf-8','app.js':'text/javascript; charset=utf-8','style.css':'text/css; charset=utf-8'}[asset])
+            return self.send(200,(ROOT/'static'/asset).read_bytes(),{'index.html':'text/html; charset=utf-8','app.js':'text/javascript; charset=utf-8','qrcode.js':'text/javascript; charset=utf-8','style.css':'text/css; charset=utf-8'}[asset])
         except (ValueError,KeyError) as e:self.send(400,dict(error=str(e)))
         except Exception:self.send(500,dict(error='Внутренняя ошибка; проверьте доступность хранилища и Docker'))
     def do_POST(self):

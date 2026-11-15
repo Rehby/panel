@@ -64,6 +64,18 @@ class InstallShellTest(unittest.TestCase):
 
 
 class UpdateTest(unittest.TestCase):
+    def test_proxy_migration_preserves_existing_location(self):
+        old='server {\n    location ^~ /turn-sub/ {\n        proxy_pass http://127.0.0.1:8080;\n    }\n}\n'
+        result=updater.subscription_proxy_config(old)
+        self.assertIn('location ^~ /subscription/',result)
+        self.assertIn('location ^~ /turn-sub/',result)
+        self.assertIsNone(updater.subscription_proxy_config(result))
+        self.assertIn('location ^~ /subscription/',updater.subscription_proxy_config(old.replace(':8080;',':8081;')))
+        with self.assertRaises(ValueError):
+            updater.subscription_proxy_config(old.replace('127.0.0.1','other.example'))
+        with self.assertRaises(ValueError):
+            updater.subscription_proxy_config(old.replace(':8080;',':8080/turn-sub/;'))
+
     def test_fresh_install_runs_installer_and_checks_health(self):
         with tempfile.TemporaryDirectory() as directory:
             root=Path(directory)
@@ -77,6 +89,7 @@ class UpdateTest(unittest.TestCase):
                 calls.append(args)
                 env.write_text('YPTUN_DATA='+str(data)+'\n')
             with patch.multiple(updater,SOURCE=source,ROOT=installed,DATA=data,ENV=env,
+                                NGINX=root/'nginx.conf',
                                 check_dependencies=lambda:None,run=run,
                                 health=lambda values:calls.append(values)), \
                  patch.object(updater.os,'geteuid',return_value=0):
@@ -102,6 +115,9 @@ class UpdateTest(unittest.TestCase):
                     db.execute("insert into items values ('original')")
                 env=root/'panel.env';env.write_text('YPTUN_DATA='+str(data)+'\n')
                 helper=root/'helper';helper.write_text('old helper')
+                nginx=root/'nginx.conf'
+                old_nginx='server {\n    location ^~ /turn-sub/ {\n        proxy_pass http://127.0.0.1:8080;\n    }\n}\n'
+                nginx.write_text(old_nginx)
                 calls=[]
                 def run(args,**kwargs):
                     calls.append(args)
@@ -111,7 +127,7 @@ class UpdateTest(unittest.TestCase):
                             db.execute("update items set value='changed'")
                         raise RuntimeError('health failed')
                 with patch.multiple(updater,SOURCE=source,ROOT=installed,DATA=data,ENV=env,
-                                    BACKUPS=root/'backups',HELPERS=(('https-admin.py',str(helper)),),
+                                    BACKUPS=root/'backups',NGINX=nginx,HELPERS=(('https-admin.py',str(helper)),),
                                     check_dependencies=lambda:None,run=run,health=health), \
                      patch.object(updater.os,'geteuid',return_value=0):
                     if fail:
@@ -121,6 +137,10 @@ class UpdateTest(unittest.TestCase):
                         updater.update('a'*40)
                 self.assertEqual((installed/'server.py').read_text(),'old' if fail else 'new')
                 self.assertEqual(helper.read_text(),'old helper' if fail else 'new helper')
+                if fail:
+                    self.assertEqual(nginx.read_text(),old_nginx)
+                else:
+                    self.assertIn('location ^~ /subscription/',nginx.read_text())
                 if not fail:
                     self.assertEqual(installed.stat().st_mode & 0o777,0o755)
                 with sqlite3.connect(database) as db:
