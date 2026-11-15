@@ -181,6 +181,8 @@ def update(revision):
     if updating:
         run(['systemctl', 'is-active', '--quiet', 'yptun-panel'])
     address = prompt_address() if not updating or not HTTPS_STATUS.exists() else None
+    if address:
+        print('Адрес принят.', flush=True)
     print('Подготовка ' + ('обновления' if updating else 'установки') + ' панели…', flush=True)
 
     ROOT.parent.mkdir(parents=True, exist_ok=True)
@@ -213,6 +215,7 @@ def update(revision):
             dbpath = DATA / 'panel.sqlite3'
             if not dbpath.is_file():
                 raise RuntimeError('Не найдена база данных панели')
+            print('Остановка панели и резервное копирование базы…', flush=True)
             run(['systemctl', 'stop', 'yptun-panel'])
             stopped = True
             with sqlite3.connect('file:' + str(dbpath) + '?mode=ro', uri=True) as db, sqlite3.connect(backup / 'panel.sqlite3') as copy:
@@ -226,10 +229,12 @@ def update(revision):
                 shutil.copyfile(ROOT / 'deploy' / name, target)
                 os.chmod(target, 0o755)
             if nginx_update is not None:
+                print('Обновление конфигурации nginx…', flush=True)
                 nginx_changed = True
                 write_nginx(nginx_update)
                 run(['nginx', '-t'])
                 run(['systemctl', 'reload', 'nginx'])
+            print('Запуск и проверка панели…', flush=True)
             run(['systemctl', 'start', 'yptun-panel'])
             health(values)
         else:

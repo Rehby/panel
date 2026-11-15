@@ -9,7 +9,9 @@ import sys
 
 ROOT=Path('/opt/yptun-panel')
 
-def run(args,**kwargs):return subprocess.run(args,check=True,text=True,**kwargs)
+def run(args,**kwargs):
+    if not kwargs.get('capture_output') and 'stdout' not in kwargs:kwargs['stdout']=sys.stderr
+    return subprocess.run(args,check=True,text=True,**kwargs)
 
 def install():
     if os.geteuid()!=0:raise SystemExit('Run as root')

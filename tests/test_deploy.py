@@ -122,6 +122,33 @@ class InstallShellTest(unittest.TestCase):
             self.assertFalse((root/'calls').exists())
 
 
+class InstallProgressTest(unittest.TestCase):
+    def test_command_output_is_live_and_captured_credentials_remain_private(self):
+        script=("import sys; sys.path.insert(0,sys.argv[1]); import install; "
+                "install.run([sys.executable,'-u','-c',sys.argv[2]]); "
+                "result=install.run([sys.executable,'-c',sys.argv[3]],capture_output=True); "
+                "print(result.stdout,end='')")
+        worker="import sys; print('service progress',flush=True); sys.stdin.readline()"
+        credentials="print('{\"created\":\"test-secret\"}')"
+        deploy=str(Path(__file__).resolve().parents[1]/'deploy')
+        process=subprocess.Popen([sys.executable,'-c',script,deploy,worker,credentials],
+                                 stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
+        try:
+            self.assertTrue(select.select([process.stderr],[],[],10)[0], 'Нет вывода во время работы команды')
+            progress=os.read(process.stderr.fileno(),4096)
+            self.assertIn(b'service progress',progress)
+            self.assertIsNone(process.poll())
+            output,remaining=process.communicate(input=b'\n',timeout=10)
+            self.assertEqual(process.returncode,0,remaining.decode(errors='replace'))
+            self.assertEqual(json.loads(output),{'created':'test-secret'})
+            self.assertNotIn(b'test-secret',progress+remaining)
+        finally:
+            if process.poll() is None:
+                process.kill();process.wait()
+            for stream in (process.stdin,process.stdout,process.stderr):
+                if stream and not stream.closed:stream.close()
+
+
 class UpdateTest(unittest.TestCase):
     def test_address_prompt_uses_tty_and_validates_domain_and_ip(self):
         class TTY:
@@ -216,6 +243,7 @@ class UpdateTest(unittest.TestCase):
             data=root/'data';env=root/'panel.env'
             calls=[]
             def run(args,**kwargs):
+                self.assertIn('Адрес принят.',output.getvalue())
                 self.assertIn('Подготовка установки панели',output.getvalue())
                 calls.append(args)
                 env.write_text('YPTUN_DATA='+str(data)+'\n')
@@ -241,6 +269,7 @@ class UpdateTest(unittest.TestCase):
             self.assertIn('URL панели: https://vpn.example.com/abcdefghijklmnop/',output.getvalue())
             self.assertIn('Логин панели: admin',output.getvalue())
             self.assertIn('Пароль панели: test-password',output.getvalue())
+            self.assertNotIn('"created"',output.getvalue())
 
     def test_update_and_rollback_preserve_data(self):
         for fail in (False,True):
