@@ -44,6 +44,18 @@ class TransportTest(unittest.TestCase):
         self.assertNotIn('host',server['inbounds'][0]['streamSettings']['xhttpSettings'])
         self.assertEqual(client_config(s,u)['outbounds'][0]['streamSettings']['xhttpSettings']['host'],'cdn.example.com')
         self.assertEqual(json.loads(engine.profile(s,u))['outbounds'][0]['protocol'],'vless')
+    def test_hysteria_transport_auth_matches_and_survives_edits(self):
+        s=self.service('hysteria');u=dict(id='u',name='U',**engine.credential())
+        auth=s['hysteria_auth']
+        self.assertGreaterEqual(len(auth),32)
+        server=json.loads(engine.bundle(s,[u])['config.json'])['inbounds'][0]['streamSettings']['hysteriaSettings']
+        client=client_config(s,u)['outbounds'][0]['streamSettings']['hysteriaSettings']
+        self.assertEqual(server['auth'],auth);self.assertEqual(client['auth'],auth)
+        self.assertEqual(engine.validate(dict(s,name='Renamed'))['hysteria_auth'],auth)
+        custom=self.service('hysteria',transport_settings={'auth':'custom-secret'})
+        self.assertEqual(client_config(custom,u)['outbounds'][0]['streamSettings']['hysteriaSettings']['auth'],'custom-secret')
+        with self.assertRaisesRegex(ValueError,'совпадать'):
+            self.service('hysteria',transport_settings={'auth':'server-secret'},client_transport_settings={'auth':'other-secret'})
     def test_images_cover_all_protocols(self):
         from catalog import PROTOCOLS
         for p in PROTOCOLS:self.assertTrue(any(p['id'] in image['protocols'] for image in CATALOG),p['id'])

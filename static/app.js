@@ -26,7 +26,27 @@ if(page==='events')html=heading('Журнал событий','История и
 function openModal(title,description,body,foot=''){ $('#modal-content').innerHTML=`<div class="modal-head"><div><h2>${esc(title)}</h2><p>${esc(description)}</p></div><button class="close" data-action="close" aria-label="Закрыть">×</button></div><div class="modal-body">${body}</div>${foot?`<div class="modal-foot">${foot}</div>`:''}`;if(!modal.open)modal.showModal();}
 const select=(name,label,items,value)=>`<label>${esc(label)}<select name="${esc(name)}">${items.map(item=>{const [v,n]=Array.isArray(item)?item:[item,item];return `<option value="${esc(v)}" ${v===value?'selected':''}>${esc(n)}</option>`;}).join('')}</select></label>`;
 const field=(name,label,value='',extra='',type='text')=>`<label>${label}<input name="${name}" type="${type}" value="${esc(value)}" ${extra}></label>`;
-function renderServiceForm(protocol='vless',existing=null){const s=existing||currentServiceDefaults||{protocol,name:'',host:state.https?.host||'',port:protocol==='wdtt'?56000:state.https?.host?8443:443,security:'reality',sni:state.https?.host||'www.microsoft.com',transport:'tcp',path:'/tunnel'};openModal(existing?'Настройки службы':'Новая служба','Конфигурация сохраняется на хосте панели.',`<form id="service-form" data-id="${existing?.id||''}"><div class="grid"><label class="full">Протокол<select name="protocol" ${existing?'disabled':''}>${state.protocols.map(p=>`<option value="${p.id}" ${p.id===s.protocol?'selected':''}>${esc(p.name)} · ${p.id==='raw'?'свой JSON':'автонастройка'}</option>`).join('')}</select></label>${field('name','Название',s.name,'required placeholder="Например, Frankfurt · основной"')}${field('host','Внешний IP / домен',s.host,'required placeholder="vpn.example.com"')}${field('port','Порт',s.port,'min="1" max="65535" required','number')}<div id="protocol-fields" class="full"></div><p class="form-error full" id="form-error"></p></div></form>`,`<button class="secondary" data-action="close">Отмена</button><button class="primary" type="submit" form="service-form">${existing?'Сохранить':'Создать службу'} ↗</button>`);const select=$('[name="protocol"]');const update=()=>protocolFields(select.value,s);select.addEventListener('change',async()=>{try{const d=await api('service-defaults',{protocol:select.value});Object.assign(s,d);for(const key of ['name','host','port'])$('[name="'+key+'"]').value=d[key];update();}catch(e){toast(e.message,true);}});update();}
+function renderServiceForm(protocol='vless',existing=null){
+ const s=existing||currentServiceDefaults||{protocol,name:'',host:state.https?.host||'',port:protocol==='wdtt'?56000:state.https?.host?8443:443,security:'reality',sni:state.https?.host||'www.microsoft.com',transport:'tcp',path:'/tunnel'};
+ openModal(existing?'Настройки службы':'Новая служба','Конфигурация сохраняется на хосте панели.',`<form id="service-form" data-id="${existing?.id||''}"><div class="grid"><label class="full">Протокол<select name="protocol" ${existing?'disabled':''}>${state.protocols.map(p=>`<option value="${p.id}" ${p.id===s.protocol?'selected':''}>${esc(p.name)} · ${p.id==='raw'?'свой JSON':'автонастройка'}</option>`).join('')}</select></label>${field('name','Название',s.name,'required placeholder="Например, Frankfurt · основной"')}${field('host','Внешний IP / домен',s.host,'required placeholder="vpn.example.com"')}${field('port','Порт',s.port,'min="1" max="65535" required','number')}<div id="protocol-fields" class="full"></div><p class="form-error full" id="form-error"></p></div></form>`,`<button class="secondary" data-action="close">Отмена</button><button class="primary" type="submit" form="service-form">${existing?'Сохранить':'Создать службу'} ↗</button>`);
+ const form=$('#service-form'),select=form.querySelector('[name="protocol"]'),name=form.querySelector('[name="name"]');
+ let nameEdited=false;
+ const updateName=()=>{
+  if(existing||nameEdited)return;
+  const p=state.protocols.find(p=>p.id===select.value);
+  if(!p)return;
+  name.value=p.name;
+  if(p.id==='vless'){
+   name.value+=' · '+(form.querySelector('[name="transport"]')?.value||'tcp').toUpperCase();
+   if(form.querySelector('[name="self_sni"]')?.value==='true')name.value+=' · SELF';
+  }
+ };
+ const update=()=>{protocolFields(select.value,s);updateName();};
+ name.addEventListener('input',()=>{nameEdited=true;});
+ form.addEventListener('change',e=>{if(['transport','security','self_sni'].includes(e.target.name))updateName();});
+ select.addEventListener('change',async()=>{try{const d=await api('service-defaults',{protocol:select.value});Object.assign(s,d);for(const key of ['host','port'])form.querySelector('[name="'+key+'"]').value=d[key];update();}catch(e){toast(e.message,true);}});
+ update();
+}
 function advancedProtocolFields(id,s){
  const p=state.protocols.find(p=>p.id===id),root=$('#protocol-fields');
  if(id==='wdtt'){root.innerHTML=`<div class="notice">qWDTT: запустите туннель, затем выдавайте доступ. Нужен собранный образ yptun/wdtt:1.4.3. Штатный лимит: 10 пользователей. VK-хеши задаются каждому пользователю.</div><div class="grid">${field('wg_port','Внутренний WG-порт',s.wg_port||56001,'min="1024" max="65535"','number')}${field('local_port','Локальный порт клиента',s.local_port||9000,'min="1024" max="65535"','number')}${field('dns','DNS для клиента',s.dns||'1.1.1.1')}</div>`;return;}
@@ -149,7 +169,7 @@ function minimalCustomFields(id,s){
  let controls='';
  if(id==='olcrtc'){const provider=s.provider||'jitsi',transports=rtcTransports(provider),transport=transports.includes(s.rtc_transport)?s.rtc_transport:transports[0];controls=select('provider','Сервис звонков',[['jitsi','Jitsi'],['mtslink','МТС Линк'],['vkcalls','VK Звонки'],['salutejazz','Салют Jazz'],['telemost','Телемост']],provider)+field('room','Комната / ссылка звонка',s.room||'','required')+select('rtc_transport','Транспорт',transports.map(t=>[t,rtcTransportNames[t]]),transport);}
  if(id==='masterdns')controls=field('dns_domain','Домен DNS-туннеля',s.dns_domain||s.host||'','required')+'<p class="tip full">Ключ шифрования создастся автоматически. Клиент получит прямой адрес DNS-сервера со случайным портом. Делегация DNS нужна для подключения через сторонние рекурсивные резолверы.</p>';
- if(id==='openflux')controls=select('flux_transport','Площадка',[['yandex','Яндекс Документы'],['vyandex','Яндекс · видео'],['mailru','Mail.ru'],['cupsonline','cups.online'],['telemost','Телемост']],s.flux_transport||'yandex')+field('room_url','Ссылка комнаты / документа',s.room_url||'','required type="url"');
+ if(id==='openflux')controls=select('flux_transport','Площадка',[['cupsonline','cups.online · автоматически'],['yandex','Яндекс Документы'],['vyandex','Яндекс · видео'],['mailru','Mail.ru'],['telemost','Телемост']],s.flux_transport||'cupsonline')+field('room_url','Ссылка комнаты / документа',s.room_url||'','','url')+'<p class="tip full" id="flux-room-help"></p>';
  if(id==='warp')controls='<div class="tip full">Внешний доступ VLESS + Reality, выход через WARP. Ключи и приватный SOCKS-прокси настраиваются автоматически.</div>';
  if(id==='vkturn')controls='<div class="tip full">WireGuard-backend и ключи будут созданы автоматически. VK-ссылку укажите при выдаче подключения пользователю.</div>';
  if(id==='trusttunnel')controls=`<input type="hidden" name="security" value="tls"><input type="hidden" name="certificate_id" value="${esc(s.certificate_id||'')}"><input type="hidden" name="sni" value="${esc(s.sni||s.host||'')}"><div class="grid full">${select('certificate_mode','Сертификат',[['domain','Домен · Let’s Encrypt'],['ip','IP · самоподписанный']],s.certificate_mode||'domain')}${field('certificate_host','Домен или IP для сертификата',s.certificate_host||s.host||'')}<div class="full"><button type="button" data-action="generate-cert">Выпустить сертификат</button><small id="certificate-status">${s.certificate_id?'Сертификат уже привязан':'Нажмите для выпуска сертификата'}</small></div></div><details class="minimal-advanced full"><summary>Свой сертификат PEM</summary><div class="grid"><label>Сертификат<textarea name="certificate">${esc(s.certificate||'')}</textarea></label><label>Приватный ключ<textarea name="private_key">${esc(s.private_key||'')}</textarea></label></div></details>`;
@@ -159,6 +179,11 @@ function minimalCustomFields(id,s){
   const allowed=rtcTransports(s.provider);if(!allowed.includes(s.rtc_transport))s.rtc_transport=allowed[0];
   minimalCustomFields(id,s);
  };
+ if(id==='openflux'){
+  const transport=root.querySelector('[name="flux_transport"]'),room=root.querySelector('[name="room_url"]'),help=root.querySelector('#flux-room-help');
+  const update=()=>{const automatic=transport.value==='cupsonline';room.required=!automatic;help.textContent=automatic?'Оставьте ссылку пустой: комнаты создадутся при сохранении, это может занять до двух минут. Сначала соберите образ OpenFlux в разделе «Образы».':'Укажите ссылку на существующую комнату или документ.';};
+  transport.onchange=update;update();
+ }
 
 }
 

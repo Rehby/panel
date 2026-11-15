@@ -9,7 +9,7 @@ import system_status
 import provision
 import wdtt
 import images
-from transports import TRANSPORTS, client_config
+from transports import TRANSPORTS, client_config, ensure_hysteria_auth
 import hashlib
 import hmac
 import io
@@ -49,6 +49,10 @@ def init():
             c.execute('INSERT OR IGNORE INTO objects VALUES (?,?,?)',(person['id'],'person',json.dumps(person)))
             u['person_id']=person['id']
             c.execute('UPDATE objects SET value=? WHERE id=?',(json.dumps(u),object_id))
+        for object_id,value in c.execute("SELECT id,value FROM objects WHERE kind='service'").fetchall():
+            service=json.loads(value)
+            if ensure_hysteria_auth(service):
+                c.execute('UPDATE objects SET value=? WHERE id=?',(json.dumps(service),object_id))
     return auth.initialize(DATA)
 
 
@@ -128,6 +132,46 @@ def generate_certificate(data):
     event('Выпущен сертификат службы: '+result['host'])
     return result
 
+def create_openflux_rooms():
+    if os.environ.get('YPTUN_ALLOW_DOCKER')!='1':raise ValueError('Для создания комнат cups.online включите управление Docker')
+    image=images.BY_IMAGE['openflux']['reference']
+    try:
+        result=subprocess.run(['docker','run','--rm','-i','--pull=never',image,'--node-wizard'],input='{"id":1,"method":"createRooms"}\n',capture_output=True,text=True,timeout=140)
+    except (OSError,subprocess.TimeoutExpired) as e:
+        raise ValueError('Не удалось запустить мастер OpenFlux: Docker недоступен или превышено время ожидания') from e
+    if result.returncode:
+        raise ValueError('Не удалось запустить мастер OpenFlux. Проверьте Docker и соберите образ в разделе «Образы». '+result.stderr[-1000:])
+    try:
+        response=json.loads(result.stdout)
+    except json.JSONDecodeError as e:
+        raise ValueError('Мастер OpenFlux вернул некорректный ответ') from e
+    if not isinstance(response,dict) or response.get('id')!=1 or not isinstance(response.get('ok'),bool):
+        raise ValueError('Мастер OpenFlux вернул некорректный ответ')
+    if not response['ok']:
+        raise ValueError('Не удалось создать комнаты cups.online: '+str(response.get('error') or 'неизвестная ошибка'))
+    rooms=response.get('rooms')
+    try:
+        if not isinstance(rooms,str) or not rooms or len(rooms)>2048:raise ValueError()
+        decoded=base64.b64decode(rooms+'='*(-len(rooms)%4),altchars=b'-_',validate=True)
+        ids=json.loads(decoded)
+        if not isinstance(ids,list) or not ids or not all(isinstance(x,str) and str(uuid.UUID(x))==x for x in ids):raise ValueError()
+    except (ValueError,TypeError,UnicodeDecodeError) as e:
+        raise ValueError('Мастер OpenFlux вернул некорректный список комнат') from e
+    return 'https://interview.cups.online/live-coding/?rooms='+rooms
+
+def prepare_mutation(path,data):
+    parts=path.strip('/').split('/')
+    if len(parts)<2 or parts[1]!='services' or len(parts)>4:return data
+    if len(parts)==2:
+        s=data
+    elif len(parts)==4 and parts[3]=='edit':
+        with LOCK:s=get(parts[2],'service')
+        protocol=s['protocol'];s.update(data);s['protocol']=protocol
+    else:return data
+    if s.get('protocol')=='openflux' and s.get('simple_engine') is True and s.get('flux_transport')=='cupsonline' and not str(s.get('room_url') or '').strip():
+        return dict(data,room_url=create_openflux_rooms())
+    return data
+
 def prepare_service(data):
     s=dict(data)
     if not s.get('image') and BY_ID.get(s.get('protocol'),{}).get('mode')=='custom':
@@ -135,8 +179,11 @@ def prepare_service(data):
         s.update(image_id=image['id'],image=image['reference'],command=image.get('command',[]))
     if not s.get('port') or not s.get('name') or not s.get('host'):
         preset=service_defaults(s.get('protocol'))
-        for key in ('port','name','host','transport','security','sni','path'):
+        for key in ('port','host','transport','security','sni','path'):
             if s.get(key) in (None,''):s[key]=preset[key]
+    if not str(s.get('name') or '').strip():
+        if s.get('protocol') not in BY_ID:raise ValueError('Неизвестный протокол')
+        s['name']=defaults.service_name(s['protocol'],s.get('transport'),s.get('self_sni',False))
     if s.get('self_sni'):
         status=https_status()
         if not status.get('self_sni_ready'):raise ValueError('Сначала настройте HTTPS по домену в разделе HTTPS и доступ')
@@ -490,6 +537,7 @@ class Handler(BaseHTTPRequestHandler):
                 auth.logout(self.session_token())
                 return self.send(200,{},headers={'Set-Cookie':self.cookie('',0)})
             if not self.auth():return self.send(401,dict(error='Требуется вход'))
+            data=prepare_mutation(path,data)
             with LOCK:result=mutate(path,data)
             self.send(200,result)
         except (ValueError,KeyError,TypeError,subprocess.SubprocessError) as e:self.send(400,dict(error=str(e)))

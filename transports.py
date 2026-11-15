@@ -1,6 +1,7 @@
 """Transport capabilities of Xray v26.9.30; aliases normalized before persistence."""
 import copy
 import json
+import secrets
 
 TRANSPORTS = [
  dict(id='tcp',name='RAW / TCP',key='tcpSettings',security=['reality','tls','none'],defaults={}),
@@ -15,6 +16,14 @@ TRANSPORTS = [
 ]
 BY_TRANSPORT={t['id']:t for t in TRANSPORTS}
 ALIASES={'raw':'tcp','mkcp':'kcp','websocket':'ws','splithttp':'xhttp'}
+
+def ensure_hysteria_auth(s):
+    settings=s.get('transport_settings')
+    if s.get('protocol') not in ('vless','vmess','trojan') or s.get('transport')!='hysteria':return False
+    if isinstance(settings,dict) and settings.get('auth'):return False
+    if s.get('hysteria_auth'):return False
+    s['hysteria_auth']=secrets.token_urlsafe(32)
+    return True
 
 
 def object_value(value,label):
@@ -35,6 +44,13 @@ def validate_transport(s):
     if s['security'] not in t['security']:raise ValueError(t['name']+': доступна защита '+', '.join(t['security']))
     s['transport_settings']=object_value(s.get('transport_settings'),'Серверные настройки транспорта')
     s['client_transport_settings']=object_value(s.get('client_transport_settings'),'Клиентские настройки транспорта')
+    if s['transport']=='hysteria':
+        if not isinstance(s['transport_settings'].get('auth',''),str):raise ValueError('Hysteria: auth должен быть строкой')
+        ensure_hysteria_auth(s)
+        auth=s['transport_settings'].get('auth') or s.get('hysteria_auth')
+        if not isinstance(auth,str) or not auth.strip():raise ValueError('Hysteria: auth должен быть непустой строкой')
+        if 'auth' in s['client_transport_settings'] and s['client_transport_settings']['auth']!=auth:
+            raise ValueError('Hysteria: auth клиента должен совпадать с серверным')
     if s['transport']=='xhttp':
         mode=s.get('xhttp_mode','auto')
         if mode not in ('auto','packet-up','stream-up','stream-one'):raise ValueError('Неверный режим XHTTP')
@@ -57,7 +73,13 @@ def transport_settings(s,client=False):
     if s.get('transport_host') and typ in ('ws','httpupgrade','xhttp','masque'):out['host']=s['transport_host']
     if typ=='kcp' and s.get('kcp_seed'):out['seed']=s['kcp_seed']
     out.update(copy.deepcopy(s.get('transport_settings',{})))
+    if typ=='hysteria':
+        if not isinstance(out.get('auth',''),str):raise ValueError('Hysteria: auth должен быть строкой')
+        auth=out.get('auth') or s.get('hysteria_auth')
+        if not isinstance(auth,str) or not auth.strip():raise ValueError('Hysteria: отсутствует ключ транспорта; сохраните настройки службы')
+        out['auth']=auth
     if client:out.update(copy.deepcopy(s.get('client_transport_settings',{})))
+    if typ=='hysteria' and out['auth']!=auth:raise ValueError('Hysteria: auth клиента должен совпадать с серверным')
     return out
 
 

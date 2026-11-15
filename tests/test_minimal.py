@@ -10,6 +10,10 @@ class MinimalTest(unittest.TestCase):
    with self.subTest(protocol=p['id']):
     s=defaults.setup(p['id'],'vpn.example.com',{8443,56000});self.assertTrue(s['name']);self.assertEqual(s['host'],'vpn.example.com');self.assertNotIn(s['port'],{8443,56000,22,80,443,8080,9443})
     if p['mode']=='custom':self.assertTrue(s['image']);self.assertIsInstance(s['command'],list)
+ def test_default_service_names_use_protocol(self):
+  self.assertEqual(defaults.setup('openflux','vpn.example.com',set())['name'],'OpenFlux')
+  self.assertEqual(defaults.setup('vless','vpn.example.com',set())['name'],'VLESS · TCP')
+  self.assertEqual(defaults.service_name('vless','raw',True),'VLESS · TCP · SELF')
  def test_bound_port_is_not_selected(self):
   with socket.socket() as sock:
    sock.bind(('0.0.0.0',8443));self.assertNotEqual(defaults.free_port('vless',set()),8443)

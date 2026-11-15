@@ -20,7 +20,7 @@ class HTTPTest(unittest.TestCase):
     def tearDownClass(cls):cls.http.shutdown();cls.http.server_close();server.DATA=cls.old;cls.tmp.cleanup()
     def request(self,path,data=None,cookie=None,origin=None,raw=False):
         if not raw:path=server.auth.CONFIG['base_path']+path
-        c=http.client.HTTPConnection('127.0.0.1',self.http.server_port)
+        c=http.client.HTTPConnection('127.0.0.1',self.http.server_port,timeout=5)
         headers={'Content-Type':'application/json'}
         if cookie:headers['Cookie']=cookie
         if origin:headers['Origin']=origin
@@ -75,5 +75,26 @@ class HTTPTest(unittest.TestCase):
         self.assertEqual(self.request('/static/../server.py')[0],404)
         self.assertEqual(self.request('/api/logout',{},cookie)[0],200)
         self.assertEqual(self.request('/api/state',cookie=cookie)[0],401)
+
+    def test_openflux_room_creation_does_not_block_panel_requests(self):
+        status,_,headers=self.request('/api/login',dict(username=self.credentials['username'],password=self.credentials['password']))
+        self.assertEqual(status,200);cookie=headers['Set-Cookie'].split(';')[0]
+        started=threading.Event();release=threading.Event();result=[]
+        def create_rooms():
+            started.set()
+            if not release.wait(5):raise ValueError('test timed out')
+            return 'https://interview.cups.online/live-coding/?rooms=example'
+        def create_service():
+            result.append(self.request('/api/services',dict(name='OpenFlux',host='vpn.example.com',port=23456,protocol='openflux',simple_engine=True,flux_transport='cupsonline',room_url=''),cookie))
+        with patch.object(server,'create_openflux_rooms',side_effect=create_rooms):
+            thread=threading.Thread(target=create_service);thread.start()
+            try:
+                self.assertTrue(started.wait(3))
+                self.assertEqual(self.request('/api/state',cookie=cookie)[0],200)
+            finally:
+                release.set();thread.join(5)
+        self.assertFalse(thread.is_alive())
+        self.assertEqual(result[0][0],200)
+        self.assertEqual(json.loads(result[0][1])['room_url'],'https://interview.cups.online/live-coding/?rooms=example')
 
 if __name__=='__main__':unittest.main()

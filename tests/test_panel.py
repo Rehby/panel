@@ -3,11 +3,14 @@ import io
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlsplit
+import zlib
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 import engine
 import server
@@ -63,6 +66,26 @@ class PanelTest(unittest.TestCase):
         self.assertEqual(compose['services']['tunnel']['user'],str(os.getuid())+':'+str(os.getgid()))
         self.assertNotIn('DAC_OVERRIDE',compose['services']['tunnel']['cap_add'])
         self.assertIn('sni=vpn.example.com',engine.profile(s,u))
+    def test_automatic_service_name_uses_vless_options_and_preserves_manual_names(self):
+        fields=dict(protocol='vless',host='vpn.example.com',port=23456,transport='xhttp',security='reality',self_sni=True)
+        with patch.object(server,'https_status',return_value=dict(host='vpn.example.com',self_sni_ready=True)):
+            s=server.prepare_service(fields)
+            self.assertEqual(s['name'],'VLESS · XHTTP · SELF')
+            self.assertEqual(server.prepare_service(dict(fields,name='Моя служба'))['name'],'Моя служба')
+            self.assertEqual(server.prepare_service(dict(fields,self_sni=False))['name'],'VLESS · XHTTP')
+        s=server.prepare_service(dict(protocol='shadowsocks',host='vpn.example.com',port=23457))
+        self.assertEqual(s['name'],'Shadowsocks')
+    def test_existing_hysteria_transport_gets_persistent_auth_on_init(self):
+        s=engine.validate(dict(protocol='vless',name='Old',host='vpn.example.com',port=23456,transport='hysteria',security='tls',certificate='-----BEGIN CERTIFICATE-----',private_key='-----BEGIN PRIVATE KEY-----'))
+        s.update(id='legacy',desired='stopped');s.pop('hysteria_auth')
+        server.put('service',s);server.init();saved=server.get('legacy','service')
+        self.assertTrue(saved['hysteria_auth'])
+        server.init();self.assertEqual(server.get('legacy','service')['hysteria_auth'],saved['hysteria_auth'])
+        u=dict(id='u',name='User',**engine.credential())
+        server_settings=json.loads(engine.bundle(saved,[u])['config.json'])['inbounds'][0]['streamSettings']['hysteriaSettings']
+        client_settings=json.loads(engine.profile(saved,u))['outbounds'][0]['streamSettings']['hysteriaSettings']
+        self.assertEqual(server_settings['auth'],saved['hysteria_auth'])
+        self.assertEqual(client_settings['auth'],saved['hysteria_auth'])
     def test_auth_persistence_and_rate_limit(self):
         import auth
         before=dict(auth.CONFIG);auth.initialize(server.DATA)
@@ -84,5 +107,61 @@ class PanelTest(unittest.TestCase):
     def test_zip_bundle_secret_files(self):
         s=self.service();u=self.user(s)
         files=engine.bundle(s,[u]);self.assertIn('compose.json',files);self.assertEqual((server.DATA/s['id']/'config.json').stat().st_mode & 0o777,0o600)
+    def test_openflux_cups_auto_rooms_match_profile_and_survive_edit(self):
+        room='https://interview.cups.online/live-coding/?rooms=example'
+        with patch.object(server,'create_openflux_rooms',return_value=room) as create:
+            data=dict(name='Test',host='vpn.example.com',port=443,protocol='openflux',simple_engine=True,flux_transport='cupsonline',room_url='')
+            s=server.mutate('/api/services',server.prepare_mutation('/api/services',data))
+            u=self.user(s)
+            path='/api/services/'+s['id']+'/edit'
+            server.mutate(path,server.prepare_mutation(path,dict(name='Renamed',simple_engine=True,flux_transport='cupsonline',room_url=room)))
+            saved=server.get(s['id'],'service')
+            self.assertEqual(create.call_count,1)
+        self.assertEqual(saved['room_url'],room);self.assertEqual(saved['engine_key'],s['engine_key'])
+        encoded=engine.profile(saved,u).split('/v1/',1)[1]
+        config=json.loads(zlib.decompress(base64.urlsafe_b64decode(encoded+'='*(-len(encoded)%4)),wbits=-15))
+        command=json.loads(engine.bundle(saved,[u])['compose.json'])['services']['tunnel']['command']
+        self.assertEqual(config['transports'][0]['url'],room);self.assertEqual(config['context'],room)
+        self.assertIn('--url='+room,command);self.assertIn('--session-context='+room,command)
+        self.assertEqual(config['secret'],saved['engine_key'])
+        new_room='https://interview.cups.online/live-coding/?rooms=new'
+        with patch.object(server,'create_openflux_rooms',return_value=new_room) as create:
+            data=server.prepare_mutation(path,dict(room_url=''))
+            server.mutate(path,data)
+            create.assert_called_once()
+        updated=server.get(s['id'],'service')
+        self.assertEqual(updated['room_url'],new_room);self.assertEqual(updated['engine_key'],s['engine_key'])
+        encoded=engine.profile(updated,u).split('/v1/',1)[1]
+        config=json.loads(zlib.decompress(base64.urlsafe_b64decode(encoded+'='*(-len(encoded)%4)),wbits=-15))
+        self.assertEqual(config['transports'][0]['url'],new_room)
+        self.assertIn('--url='+new_room,json.loads(engine.bundle(updated,[u])['compose.json'])['services']['tunnel']['command'])
+    def test_openflux_manual_urls_and_generation_errors(self):
+        with patch.object(server,'create_openflux_rooms',side_effect=ValueError('rooms failed')) as create:
+            with self.assertRaisesRegex(ValueError,'rooms failed'):
+                server.prepare_mutation('/api/services',dict(protocol='openflux',simple_engine=True,flux_transport='cupsonline',room_url=''))
+            self.assertFalse(server.rows('service'))
+            for transport in ('yandex','vyandex','mailru','telemost'):
+                with self.subTest(transport=transport):
+                    with self.assertRaisesRegex(ValueError,'HTTPS'):
+                        server.prepare_service(dict(protocol='openflux',simple_engine=True,flux_transport=transport,room_url='',name='Test',host='vpn.example.com',port=23456))
+            data=dict(name='Test',host='vpn.example.com',port=443,protocol='openflux',simple_engine=True,flux_transport='cupsonline',room_url='https://example.com/room')
+            s=server.mutate('/api/services',server.prepare_mutation('/api/services',data))
+            self.assertEqual(s['room_url'],'https://example.com/room');self.assertEqual(create.call_count,1)
+    def test_openflux_room_wizard_response_and_failures(self):
+        ids=['12345678-1234-1234-1234-123456789abc']
+        rooms=base64.urlsafe_b64encode(json.dumps(ids).encode()).decode().rstrip('=')
+        success=SimpleNamespace(returncode=0,stdout=json.dumps(dict(id=1,ok=True,rooms=rooms)),stderr='')
+        with patch.dict(os.environ,{'YPTUN_ALLOW_DOCKER':'1'}),patch.object(server.subprocess,'run',return_value=success) as run:
+            self.assertEqual(server.create_openflux_rooms(),'https://interview.cups.online/live-coding/?rooms='+rooms)
+            self.assertIn('--node-wizard',run.call_args.args[0]);self.assertEqual(json.loads(run.call_args.kwargs['input'])['method'],'createRooms')
+            for response in (dict(id=1,ok=False,error='403'),dict(id=1,ok=True,rooms='bad!')):
+                run.return_value=SimpleNamespace(returncode=0,stdout=json.dumps(response),stderr='')
+                with self.assertRaises(ValueError):server.create_openflux_rooms()
+            run.return_value=SimpleNamespace(returncode=1,stdout='',stderr='image missing')
+            with self.assertRaisesRegex(ValueError,'соберите образ'):server.create_openflux_rooms()
+            run.side_effect=subprocess.TimeoutExpired('docker',140)
+            with self.assertRaisesRegex(ValueError,'время ожидания'):server.create_openflux_rooms()
+        with patch.dict(os.environ,{'YPTUN_ALLOW_DOCKER':'0'}):
+            with self.assertRaisesRegex(ValueError,'Docker'):server.create_openflux_rooms()
 
 if __name__=='__main__':unittest.main()

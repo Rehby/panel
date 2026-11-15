@@ -110,7 +110,7 @@ input[type=checkbox]{accent-color:#5147c7}
 .certificate-toolbar>small,.upload-status{color:#697287}
 details>summary{color:#5149ab}
 .minimal-advanced{border-color:#e8e9f2}
-.login{grid-template-columns:minmax(0,430px);padding:24px;background:radial-gradient(circle at 20% 15%,#e8e6ff,transparent 36%),radial-gradient(circle at 85% 85%,#e5f1ff,transparent 35%),#f5f6fb}
+.login{grid-template-columns:minmax(0,430px);justify-content:center;padding:24px;background:radial-gradient(circle at 20% 15%,#e8e6ff,transparent 36%),radial-gradient(circle at 85% 85%,#e5f1ff,transparent 35%),#f5f6fb}
 .login-box{width:100%;max-width:100%;padding:38px;background:#fff;border:1px solid #e7e8f1;border-radius:18px;box-shadow:0 22px 65px #34365414}
 .login h1{font-size:38px;letter-spacing:-1.5px;font-weight:650;color:#24283e;margin:38px 0 16px}
 .login p{font-size:13px;color:#697287}
