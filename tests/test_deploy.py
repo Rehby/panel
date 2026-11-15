@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import pty
 import select
+import shlex
 import signal
 import sqlite3
 import subprocess
@@ -171,13 +172,13 @@ class UpdateTest(unittest.TestCase):
         with patch('builtins.open',side_effect=[TTY([]),OSError('no tty')]):
             with self.assertRaisesRegex(RuntimeError,'терминал'):updater.prompt_address()
 
-    def test_address_prompt_with_piped_stdin_and_controlling_terminal(self):
-        script="import sys; sys.path.insert(0,sys.argv[1]); import update,json; print(json.dumps(update.prompt_address()))"
+    def run_terminal_prompt(self,args,env=None,pipe_stdin=False):
         pid,master=pty.fork()
         if pid==0:
-            read_fd,write_fd=os.pipe();os.close(write_fd)
-            os.dup2(read_fd,0);os.close(read_fd)
-            os.execv(sys.executable,[sys.executable,'-c',script,str(Path(__file__).resolve().parents[1]/'deploy')])
+            if pipe_stdin:
+                read_fd,write_fd=os.pipe();os.close(write_fd)
+                os.dup2(read_fd,0);os.close(read_fd)
+            os.execvpe(args[0],args,env or os.environ)
         output=b'';sent=False;status=None
         try:
             deadline=time.monotonic()+10
@@ -206,6 +207,22 @@ class UpdateTest(unittest.TestCase):
         self.assertIn('нажмите Enter'.encode(),output)
         self.assertIn(b'"host": "vpn.example.com"',output)
         self.assertIn(b'"mode": "domain"',output)
+
+    def test_address_prompt_with_piped_stdin_and_controlling_terminal(self):
+        script="import sys; sys.path.insert(0,sys.argv[1]); import update,json; print(json.dumps(update.prompt_address()))"
+        self.run_terminal_prompt([sys.executable,'-c',script,str(Path(__file__).resolve().parents[1]/'deploy')],pipe_stdin=True)
+
+    def test_documented_sudo_pipeline_keeps_terminal_input(self):
+        script="import sys; sys.path.insert(0,sys.argv[1]); import update,json; print(json.dumps(update.prompt_address()))"
+        deploy=str(Path(__file__).resolve().parents[1]/'deploy')
+        program=shlex.join([sys.executable,'-c',script,deploy])
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            curl=root/'curl';curl.write_text('#!/bin/sh\nprintf "%s\\n" '+shlex.quote(program)+'\n');curl.chmod(0o755)
+            sudo=root/'sudo';sudo.write_text('#!/bin/sh\nexec "$@"\n');sudo.chmod(0o755)
+            env=dict(os.environ,PATH=directory+os.pathsep+os.environ.get('PATH',''))
+            command="sudo bash -c 'set -o pipefail; curl -fsSL https://raw.githubusercontent.com/Rehby/panel/main/deploy/install.sh | bash' </dev/tty"
+            self.run_terminal_prompt(['/bin/bash','-c',command],env=env)
 
     def test_https_helper_error_is_reported(self):
         result=subprocess.CompletedProcess([],1,'','{"error":"certificate failed"}')

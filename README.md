@@ -18,11 +18,10 @@ YPTUN_ALLOW_DOCKER=1 python3 -B server.py
 На Linux с работающим systemd и установленными Bash и curl выполните:
 
 ```sh
-set -o pipefail
-curl -fsSL https://raw.githubusercontent.com/Rehby/panel/main/deploy/install.sh | sudo bash
+sudo bash -c 'set -o pipefail; curl -fsSL https://raw.githubusercontent.com/Rehby/panel/main/deploy/install.sh | bash' </dev/tty
 ```
 
-Для первой установки без `sudo` выполните команду от root, заменив `sudo bash` на `bash`.
+Ввод `sudo` подключён к терминалу, чтобы запрос домена/IP работал и при настройке sudo с псевдотерминалом. При выполнении от root можно убрать `sudo`.
 
 Одна и та же команда устанавливает панель или обновляет её до текущего коммита `main`. На Debian/Ubuntu установщик добавляет недостающие пакеты через apt, включая Python 3.9+, Docker, nginx с HTTP/2, certbot, sudo, OpenSSL, Git и системные утилиты. Существующий Docker не заменяется. При отсутствии Compose v2 устанавливается проверенный по SHA-256 официальный плагин для x86_64 или arm64 (его нужно обновлять вручную). Для других дистрибутивов или архитектур необходимые компоненты следует установить вручную. Установщик проверяет systemd, HTTP/2 и службы `docker`, `nginx`, `certbot.timer`.
 

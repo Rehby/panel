@@ -2,7 +2,7 @@
 set -euo pipefail
 
 if [ "$(id -u)" != 0 ]; then
-    echo "Запустите установщик от root: curl ... | sudo bash" >&2
+    echo "Запустите установщик от root: sudo bash -c 'curl ... | bash' </dev/tty" >&2
     exit 1
 fi
 if [ "$(uname -s)" != Linux ] || ! command -v systemctl >/dev/null || ! systemctl show --property=Version --value >/dev/null 2>&1; then
