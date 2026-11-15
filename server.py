@@ -5,6 +5,7 @@ import auth
 import defaults
 import minimal
 import subscriptions
+import system_status
 import provision
 import wdtt
 import images
@@ -424,6 +425,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(200,body,'text/plain; charset=utf-8')
             if path.startswith('/api/'):
                 if not self.auth():return self.send(401,dict(error='Требуется вход'))
+                if path=='/api/system':return self.send(200,system_status.status())
                 with LOCK:
                     if path=='/api/turn-hashes':return self.send(200,dict(hashes=[x['value'] for x in rows('turnhash')]))
                     if path=='/api/images':return self.send(200,images.image_list())

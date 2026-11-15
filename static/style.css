@@ -3,3 +3,4 @@
 .minimal-advanced{margin-top:15px;border-top:1px solid #e2e8dd;padding-top:8px}.minimal-advanced>summary{font-weight:600;color:#657b59}.upload-box{border:1px dashed #bacbab;border-radius:9px;padding:19px;margin:10px 0;background:#f7faf3}.upload-status{display:block;margin-top:10px;color:#728467;line-height:1.8}input[type=file]{font-size:11px;background:white}
 
 input[type=checkbox]{display:inline-block;width:auto;margin:0 7px 0 0;vertical-align:middle;accent-color:var(--green)}button:disabled{cursor:not-allowed}
+.system-value{font-size:16px;font-weight:550;margin:13px 0 6px;overflow-wrap:anywhere}
