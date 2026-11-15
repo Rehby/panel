@@ -1,0 +1,19 @@
+[Unit]
+Description=YPtun Control Panel
+After=network.target docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User=yptun
+Group=yptun
+SupplementaryGroups=docker
+WorkingDirectory=/opt/yptun-panel
+EnvironmentFile=/etc/yptun-panel.env
+ExecStart=/usr/bin/python3 -B /opt/yptun-panel/server.py
+Restart=on-failure
+UMask=0077
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
