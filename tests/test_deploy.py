@@ -3,12 +3,17 @@ import io
 import json
 import os
 from pathlib import Path
+import pty
+import select
+import signal
 import sqlite3
 import subprocess
+import sys
 import tarfile
 import tempfile
+import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import call,patch
 
 
 def module(name):
@@ -126,15 +131,52 @@ class UpdateTest(unittest.TestCase):
             def readline(self):return next(self.lines,'')
             def write(self,text):self.output+=text
             def flush(self):pass
-        tty=TTY(['bad/url\n','VPN.Example.com\n'])
-        with patch('builtins.open',return_value=tty) as opened:
+        tty_in=TTY(['bad/url\n','VPN.Example.com\n']);tty_out=TTY([])
+        with patch('builtins.open',side_effect=[tty_in,tty_out]) as opened:
             self.assertEqual(updater.prompt_address(),dict(host='vpn.example.com',mode='domain'))
-        opened.assert_called_once_with('/dev/tty','r+')
-        self.assertIn('Укажите публичный',tty.output)
-        with patch('builtins.open',return_value=TTY(['2001:db8::1\n'])):
+        self.assertEqual(opened.call_args_list,[call('/dev/tty','r'),call('/dev/tty','w')])
+        self.assertIn('Укажите публичный',tty_out.output)
+        with patch('builtins.open',side_effect=[TTY(['2001:db8::1\n']),TTY([])]):
             self.assertEqual(updater.prompt_address(),dict(host='2001:db8::1',mode='ip'))
         with patch('builtins.open',side_effect=OSError('no tty')):
             with self.assertRaisesRegex(RuntimeError,'терминал'):updater.prompt_address()
+        with patch('builtins.open',side_effect=[TTY([]),OSError('no tty')]):
+            with self.assertRaisesRegex(RuntimeError,'терминал'):updater.prompt_address()
+
+    def test_address_prompt_with_piped_stdin_and_controlling_terminal(self):
+        script="import sys; sys.path.insert(0,sys.argv[1]); import update,json; print(json.dumps(update.prompt_address()))"
+        pid,master=pty.fork()
+        if pid==0:
+            read_fd,write_fd=os.pipe();os.close(write_fd)
+            os.dup2(read_fd,0);os.close(read_fd)
+            os.execv(sys.executable,[sys.executable,'-c',script,str(Path(__file__).resolve().parents[1]/'deploy')])
+        output=b'';sent=False;status=None
+        try:
+            deadline=time.monotonic()+10
+            while time.monotonic()<deadline:
+                if select.select([master],[],[],0.1)[0]:
+                    try:chunk=os.read(master,4096)
+                    except OSError:chunk=b''
+                    output+=chunk
+                    if not sent and 'Домен или публичный IP панели: '.encode() in output:
+                        os.write(master,b'bad/url\nVPN.Example.com\n');sent=True
+                done,result=os.waitpid(pid,os.WNOHANG)
+                if done:
+                    status=result
+                    while select.select([master],[],[],0)[0]:
+                        try:chunk=os.read(master,4096)
+                        except OSError:break
+                        if not chunk:break
+                        output+=chunk
+                    break
+            else:self.fail('Запрос адреса в терминале не завершился')
+        finally:
+            if status is None:
+                os.kill(pid,signal.SIGKILL);os.waitpid(pid,0)
+            os.close(master)
+        self.assertEqual(os.waitstatus_to_exitcode(status),0,output.decode(errors='replace'))
+        self.assertIn(b'"host": "vpn.example.com"',output)
+        self.assertIn(b'"mode": "domain"',output)
 
     def test_https_helper_error_is_reported(self):
         result=subprocess.CompletedProcess([],1,'','{"error":"certificate failed"}')

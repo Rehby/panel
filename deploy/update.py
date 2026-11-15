@@ -84,21 +84,20 @@ def prompt_address():
     helper = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(helper)
     try:
-        tty = open('/dev/tty', 'r+')
+        with open('/dev/tty', 'r') as tty_input, open('/dev/tty', 'w') as tty_output:
+            while True:
+                tty_output.write('Домен или публичный IP панели: ')
+                tty_output.flush()
+                value = tty_input.readline()
+                if not value:
+                    raise RuntimeError('Адрес панели не указан')
+                try:
+                    host, is_ip = helper.hostname(value.strip())
+                    return dict(host=host, mode='ip' if is_ip else 'domain')
+                except ValueError as error:
+                    tty_output.write(str(error) + '\n')
     except OSError as error:
         raise RuntimeError('Для ввода домена или IP нужен интерактивный терминал') from error
-    with tty:
-        while True:
-            tty.write('Домен или публичный IP панели: ')
-            tty.flush()
-            value = tty.readline()
-            if not value:
-                raise RuntimeError('Адрес панели не указан')
-            try:
-                host, is_ip = helper.hostname(value.strip())
-                return dict(host=host, mode='ip' if is_ip else 'domain')
-            except ValueError as error:
-                tty.write(str(error) + '\n')
 
 
 def configure_initial_https(address):
