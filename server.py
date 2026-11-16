@@ -194,9 +194,14 @@ def prepare_service(data):
         if not status.get('self_sni_ready'):raise ValueError('Сначала настройте HTTPS по домену в разделе HTTPS и доступ')
         s['self_sni_domain']=status['host']
     else:s.pop('self_sni_domain',None)
-    if s.get('certificate_id') and (s.get('security')=='tls' or s['protocol']=='trusttunnel'):
-        managed=certificate_helper(dict(action='read-service-certificate',certificate_id=s['certificate_id']))
+    if s['protocol']=='trusttunnel' and (s.get('simple_engine') is True or s.get('provisioned')):s['security']='tls'
+    needs_cert=s.get('security')=='tls' and (s['protocol'] in ('vless','vmess','trojan','hysteria2') or s['protocol']=='trusttunnel' and (s.get('simple_engine') is True or s.get('provisioned')))
+    if needs_cert and not s.get('certificate_id') and bool(s.get('certificate'))!=bool(s.get('private_key')):raise ValueError('Укажите сертификат и приватный ключ вместе')
+    if needs_cert and not s.get('certificate_id') and not (s.get('certificate') and s.get('private_key')):s['certificate_id']='panel'
+    if s.get('certificate_id') and needs_cert:
+        managed=certificate_helper(dict(action='read-panel-certificate') if s['certificate_id']=='panel' else dict(action='read-service-certificate',certificate_id=s['certificate_id']))
         s.update(certificate=managed['certificate'],private_key=managed['private_key'])
+        if s['certificate_id']=='panel':s['sni']=managed['host']
     s=minimal.apply(s)
     s=validate(s)
     if os.environ.get('YPTUN_HTTPS_HELPER')=='1' and s['port'] in (22,80,443,8080,9443):raise ValueError('Порт зарезервирован для SSH, HTTPS или панели; используйте, например, 8443')
@@ -206,11 +211,17 @@ def prepare_service(data):
 def configure_https(data):
     if os.environ.get('YPTUN_HTTPS_HELPER')!='1':raise ValueError('Настройка HTTPS доступна после установки на Linux-сервер')
     active=[s for s in rows('service') if s.get('self_sni')]
+    if data.get('host')!=https_status().get('host') and any(s.get('certificate_id')=='panel' for s in rows('service')):
+        raise ValueError('Сначала отвяжите службы от сертификата панели перед сменой домена или IP')
     if active and data.get('host')!=https_status().get('host'):raise ValueError('Сначала отключите self-SNI в существующих службах перед сменой домена')
     if active and data.get('mode')=='ip':raise ValueError('Сначала отключите self-SNI в службах')
     result=subprocess.run(['sudo','-n','/usr/local/sbin/yptun-https'],input=json.dumps(data),capture_output=True,text=True,timeout=300)
     if result.returncode:raise ValueError('Не удалось настроить HTTPS: '+result.stderr[-2000:])
-    status=json.loads(result.stdout);event('Обновлён HTTPS: '+status['host']);return status
+    status=json.loads(result.stdout)
+    if any(s.get('certificate_id')=='panel' for s in rows('service')):
+        try:certificate_helper(dict(action='sync-certificates'))
+        except ValueError as e:raise ValueError('HTTPS панели обновлён, но обновить сертификаты служб не удалось: '+str(e)) from e
+    event('Обновлён HTTPS: '+status['host']);return status
 
 def service_defaults(protocol,exclude_port=None):
     reserved=set().union(*(bound_ports(s) for s in rows('service')))
@@ -276,6 +287,27 @@ def require_turn_slot(s):
     cap=turn_capacity(s)
     if cap['free']<=0:raise ValueError('Лимит TURN-подписок достигнут: '+str(cap['used'])+'/10. Удалите ненужную подписку или создайте другой TURN-туннель. Отключённые подписки тоже занимают место.')
 
+def restore_turn_hashes(s,users):
+    failures=[]
+    for u in reversed(users):
+        try:turn_request(s,'/update',dict(password=u['password'],label=u['name'],vk_hash=u['vk_hash'],max_devices=u.get('max_devices',1)))
+        except Exception:failures.append(u['name'])
+    if failures:event('Не удалось восстановить VK-хеши TURN: '+', '.join(failures))
+    return failures
+
+def update_turn_hashes(s,users,value):
+    changed=[]
+    try:
+        for u in users:
+            if u.get('expires_at') and u['expires_at']<=time.time():continue
+            turn_request(s,'/update',dict(password=u['password'],label=u['name'],vk_hash=value,max_devices=u.get('max_devices',1)))
+            changed.append(u)
+    except Exception as error:
+        if restore_turn_hashes(s,changed):
+            raise ValueError('Не удалось обновить VK-хеши и восстановить некоторые подключения; проверьте журнал и настройки службы') from error
+        raise
+    return changed
+
 
 def mutate(path,data):
     parts=path.strip('/').split('/');kind=parts[1];id=parts[2] if len(parts)>2 else None;action=parts[3] if len(parts)>3 else None
@@ -302,6 +334,7 @@ def mutate(path,data):
     if kind=='services':
         if not id:
             s=prepare_service(data);s.update(id=secrets.token_hex(8),desired='stopped',created=int(time.time()))
+            if s['protocol']=='wdtt' and not s.get('vk_hash'):raise ValueError('Укажите VK-ссылку или хеш звонка для службы qWDTT')
             # Same host here: every managed service binds on this machine.
             if any(bound_ports(s)&bound_ports(x) for x in rows('service')):raise ValueError('Этот порт уже занят другой службой панели')
             write_bundle(s);put('service',s);event('Создана служба: '+s['name']);return s
@@ -309,11 +342,25 @@ def mutate(path,data):
         if action=='edit':
             updated=dict(s);updated.update(data);updated['id']=s['id'];updated['protocol']=s['protocol'];updated['desired']=s['desired']
             updated=prepare_service(updated)
+            if s['protocol']=='wdtt' and s.get('vk_hash') and not updated.get('vk_hash'):raise ValueError('Укажите VK-ссылку или хеш звонка для службы qWDTT')
             if any(x['id']!=id and bound_ports(updated)&bound_ports(x) for x in rows('service')):raise ValueError('Порт занят другой службой')
             bundle(updated,members(id))
             put('service',updated)
             try:sync(updated)
             except Exception:put('service',s);rollback(s);raise
+            users=members(id)
+            if s['protocol']=='wdtt' and updated.get('vk_hash') and updated.get('vk_hash')!=s.get('vk_hash'):
+                changed=[]
+                try:
+                    changed=update_turn_hashes(updated,users,updated['vk_hash'])
+                    with db() as c:
+                        for u in users:
+                            c.execute('UPDATE objects SET value=? WHERE id=? AND kind=?',(json.dumps(dict(u,vk_hash=updated['vk_hash'])),u['id'],'user'))
+                except Exception as error:
+                    failures=restore_turn_hashes(updated,changed)
+                    put('service',s);rollback(s)
+                    if failures:raise ValueError('Не удалось сохранить VK-хеши и восстановить некоторые подключения; проверьте журнал и настройки службы') from error
+                    raise
             event('Изменена служба: '+s['name']);return {}
         if action in ('start','restart','stop'):
             if action=='stop':compose(s,['down']);s['desired']='stopped'

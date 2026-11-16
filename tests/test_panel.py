@@ -66,6 +66,25 @@ class PanelTest(unittest.TestCase):
         self.assertEqual(compose['services']['tunnel']['user'],str(os.getuid())+':'+str(os.getgid()))
         self.assertNotIn('DAC_OVERRIDE',compose['services']['tunnel']['cap_add'])
         self.assertIn('sni=vpn.example.com',engine.profile(s,u))
+    def test_tls_services_use_panel_certificate_by_default(self):
+        cert=dict(host='panel.example.com',certificate='-----BEGIN CERTIFICATE-----',private_key='-----BEGIN PRIVATE KEY-----')
+        with patch.object(server,'certificate_helper',return_value=cert) as helper:
+            for protocol in ('vless','vmess','trojan','hysteria2','trusttunnel'):
+                data=dict(protocol=protocol,name='TLS',host='vpn.example.com',port=28443,security='tls',transport='tcp')
+                if protocol=='trusttunnel':data['simple_engine']=True
+                s=server.prepare_service(data)
+                self.assertEqual(s['certificate_id'],'panel')
+                self.assertEqual(s['sni'],'panel.example.com')
+                self.assertEqual(s['certificate'],cert['certificate'])
+                helper.assert_called_with(dict(action='read-panel-certificate'))
+        with patch.object(server,'certificate_helper',side_effect=ValueError('HTTPS не настроен')):
+            with self.assertRaisesRegex(ValueError,'HTTPS не настроен'):
+                server.prepare_service(dict(protocol='trojan',name='TLS',host='vpn.example.com',port=28443,security='tls'))
+    def test_explicit_certificate_is_preserved(self):
+        with patch.object(server,'certificate_helper') as helper:
+            s=server.prepare_service(dict(protocol='trojan',name='TLS',host='vpn.example.com',port=28443,security='tls',certificate='-----BEGIN CERTIFICATE-----',private_key='-----BEGIN PRIVATE KEY-----'))
+        self.assertNotEqual(s.get('certificate_id'),'panel')
+        helper.assert_not_called()
     def test_automatic_service_name_uses_vless_options_and_preserves_manual_names(self):
         fields=dict(protocol='vless',host='vpn.example.com',port=23456,transport='xhttp',security='reality',self_sni=True)
         with patch.object(server,'https_status',return_value=dict(host='vpn.example.com',self_sni_ready=True)):

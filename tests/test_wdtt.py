@@ -16,7 +16,7 @@ class WDTTTest(unittest.TestCase):
  def setUp(self):
   self.tmp=tempfile.TemporaryDirectory();self.old=server.DATA;server.DATA=Path(self.tmp.name);server.init()
  def tearDown(self):server.DATA=self.old;self.tmp.cleanup()
- def service(self):return server.mutate('/api/services',dict(protocol='wdtt',host='vpn.example.com',name='TURN',port=56000))
+ def service(self):return server.mutate('/api/services',dict(protocol='wdtt',host='vpn.example.com',name='TURN',port=56000,vk_hash='abc'))
  def test_compose_scope_and_owner_secrets(self):
   s=self.service();files=wdtt.bundle(s);svc=json.loads(files['compose.json'])['services']['tunnel']
   self.assertEqual(svc['cap_add'],['NET_ADMIN']);self.assertNotIn('network_mode',svc)
@@ -53,13 +53,42 @@ class WDTTTest(unittest.TestCase):
    with self.assertRaises(ValueError):server.mutate('/api/users',dict(service_id=s['id'],name='Test',vk_hash='abc'))
   self.assertEqual(server.rows('user'),[])
  def test_expiration(self):self.assertFalse(wdtt.available(dict(enabled=True,expires_at=time.time()-1)))
+ def test_shared_call_is_used_for_all_and_updated_in_core(self):
+  s=self.service();database=dict(passwords={},devices={})
+  with patch.object(wdtt,'request',side_effect=lambda service,path='',data=None:wdtt.offline_change(database,path,data)):
+   first=server.mutate('/api/users',dict(service_id=s['id'],name='First',vk_hash='ignored'))
+   second=server.mutate('/api/users',dict(service_id=s['id'],name='Second'))
+   self.assertEqual(first['vk_hash'],'abc');self.assertEqual(second['vk_hash'],'abc')
+   server.mutate('/api/services/'+s['id']+'/edit',dict(vk_hash='https://vk.com/call/new_hash'))
+   for u in (first,second):
+    self.assertEqual(server.get(u['id'],'user')['vk_hash'],'new_hash')
+    self.assertEqual(database['passwords'][u['password']]['vk_hash'],'new_hash')
+    self.assertEqual(database['passwords'][u['password']]['expires_at'],u['expires_at'])
+   server.mutate('/api/users/'+first['id']+'/edit',dict(name='First',vk_hash='different'))
+   self.assertEqual(server.get(first['id'],'user')['vk_hash'],'new_hash')
+ def test_failed_shared_call_update_restores_previous_values(self):
+  s=self.service();database=dict(passwords={},devices={});fail=[False]
+  def request(service,path='',data=None):
+   if path=='/update' and data['vk_hash']=='new_hash':
+    if fail[0]:raise ValueError('core failure')
+    fail[0]=True
+   return wdtt.offline_change(database,path,data)
+  with patch.object(wdtt,'request',side_effect=request):
+   users=[server.mutate('/api/users',dict(service_id=s['id'],name=name)) for name in ('First','Second')]
+   with self.assertRaisesRegex(ValueError,'core failure'):server.mutate('/api/services/'+s['id']+'/edit',dict(vk_hash='new_hash'))
+  self.assertEqual(server.get(s['id'],'service')['vk_hash'],'abc')
+  for u in users:
+   self.assertEqual(server.get(u['id'],'user')['vk_hash'],'abc')
+   self.assertEqual(database['passwords'][u['password']]['vk_hash'],'abc')
+ def test_new_service_requires_call(self):
+  with self.assertRaisesRegex(ValueError,'VK-ссылку'):server.mutate('/api/services',dict(protocol='wdtt',host='vpn.example.com',port=56000,name='TURN'))
 
 
 class WDTTOfflineTest(unittest.TestCase):
  def setUp(self):
   self.tmp=tempfile.TemporaryDirectory();self.previous=server.DATA;server.DATA=Path(self.tmp.name);server.init()
  def tearDown(self):server.DATA=self.previous;self.tmp.cleanup()
- def service(self):return server.mutate('/api/services',dict(protocol='wdtt',host='vpn.example.com',name='Offline TURN',port=28560))
+ def service(self):return server.mutate('/api/services',dict(protocol='wdtt',host='vpn.example.com',name='Offline TURN',port=28560,vk_hash='test_hash'))
  def fields(self,name='Phone'):return dict(label=name,vk_hash='test_hash',days=30,max_devices=1,ports='28560,56001,9000')
  def test_offline_create_edit_revoke_delete_preserves_other_data(self):
   database=dict(passwords={},devices={},extension=dict(preserve=True))

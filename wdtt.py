@@ -33,6 +33,7 @@ def hashes(value):
 
 def validate(s):
     if ':' in s['host']:raise ValueError('WDTT URI: используйте домен или IPv4')
+    if s.get('vk_hash'):s['vk_hash']=hashes(s['vk_hash'])
     s['wg_port']=int(s.get('wg_port',56001));s['local_port']=int(s.get('local_port',9000))
     if not all(1024<=s[k]<=65535 for k in ('port','wg_port','local_port')):raise ValueError('Порты WDTT: 1024–65535')
     s['dns']=s.get('dns') or '1.1.1.1'
@@ -73,7 +74,7 @@ def user_fields(s,data):
     if not 1<=len(name)<=64:raise ValueError('Метка: от 1 до 64 символов')
     days=int(data.get('days') or 30);devices=int(data.get('max_devices') or 1)
     if not 1<=days<=365 or not 1<=devices<=10:raise ValueError('Срок: 1–365 дней; устройства: 1–10')
-    return dict(label=name,vk_hash=hashes(data.get('vk_hash','')),days=days,max_devices=devices,ports=f"{s['port']},{s['wg_port']},{s['local_port']}")
+    return dict(label=name,vk_hash=hashes(s.get('vk_hash') or data.get('vk_hash','')),days=days,max_devices=devices,ports=f"{s['port']},{s['wg_port']},{s['local_port']}")
 
 def apply_view(u,view):
     u.update(password=view['password'],name=view.get('label') or u['name'],vk_hash=view.get('vk_hash',''),expires_at=view.get('expires_at',0),max_devices=view.get('max_devices',1),enabled=not view.get('is_deactivated',False))

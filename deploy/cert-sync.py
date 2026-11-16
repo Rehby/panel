@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Renewal hook: refresh only services bound to dedicated managed VPN certificates."""
+"""Renewal hook: refresh services bound to managed VPN or panel certificates."""
 import json
 import os
 from pathlib import Path
@@ -9,11 +9,14 @@ import subprocess
 
 DATA=Path('/var/lib/yptun-panel')
 REGISTRY=Path('/etc/yptun-panel/service-certificates.json')
+PANEL=Path('/etc/yptun-panel/https.json')
 
-if __name__=='__main__':
-    if os.geteuid()!=0:raise SystemExit('root required')
-    if REGISTRY.exists() and (DATA/'panel.sqlite3').exists():
-        registry=json.loads(REGISTRY.read_text())
+def sync_certificates():
+    if (DATA/'panel.sqlite3').exists():
+        registry=json.loads(REGISTRY.read_text()) if REGISTRY.exists() else {}
+        if PANEL.exists():
+            panel=json.loads(PANEL.read_text());cert=Path(panel['certificate'])
+            registry['panel']=dict(cert=str(cert),key=str(cert.parent/'privkey.pem'))
         with sqlite3.connect(DATA/'panel.sqlite3') as db:
             for id,body in db.execute("SELECT id,value FROM objects WHERE kind='service'").fetchall():
                 service=json.loads(body);cert=registry.get(service.get('certificate_id'))
@@ -34,3 +37,7 @@ if __name__=='__main__':
                 if service.get('desired')=='running':
                     subprocess.run(['docker','compose','-p','yptun-'+id,'-f',str(directory/'compose.json'),'up','-d','--force-recreate'],check=True,timeout=120)
                 print('Renewed service certificate:',id)
+
+if __name__=='__main__':
+    if os.geteuid()!=0:raise SystemExit('root required')
+    sync_certificates()

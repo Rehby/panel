@@ -148,6 +148,14 @@ def read_service_certificate(id):
     if not entry:raise ValueError('Сертификат не найден')
     return dict(certificate_id=id,host=entry['host'],mode=entry['mode'],certificate=Path(entry['cert']).read_text(),private_key=Path(entry['key']).read_text(),expires=run(['openssl','x509','-in',entry['cert'],'-noout','-enddate']).strip())
 
+def read_panel_certificate():
+    path=CONFIG/'https.json'
+    if not path.exists():raise ValueError('Сначала настройте HTTPS панели')
+    panel=json.loads(path.read_text())
+    cert=Path(panel['certificate'])
+    key=cert.parent/'privkey.pem'
+    return dict(certificate_id='panel',host=panel['host'],mode=panel['mode'],certificate=cert.read_text(),private_key=key.read_text())
+
 
 def service_certificate(data):
     import hashlib
@@ -189,6 +197,8 @@ if __name__=='__main__':
         data=json.loads(raw);action=data.get('action','https')
         if action=='service-certificate':result=service_certificate(data)
         elif action=='read-service-certificate':result=read_service_certificate(data.get('certificate_id'))
+        elif action=='read-panel-certificate':result=read_panel_certificate()
+        elif action=='sync-certificates':run(['/usr/local/sbin/yptun-cert-sync']);result={}
         elif action=='https':result=apply(data)
         else:raise ValueError('Неизвестная операция helper')
         print(json.dumps(result))
