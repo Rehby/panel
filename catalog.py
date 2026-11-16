@@ -10,7 +10,7 @@ PROTOCOLS = [
       ('wireguard','WireGuard','WireGuard','Свой конфиг и образ сервера'),
       ('amneziawg','AmneziaWG','AmneziaWG','wg-quick, параметры обфускации'),
       ('olcrtc','olcRTC','olcRTC','Транспорт через видеосвязь'),
-      ('vkturn','VK-TURN','free-turn / qWDTT / csqtt','Туннель через звонки VK'),
+      ('vkturn','VK-TURN / Free TURN','free-turn','Туннель через звонки VK'),
       ('masterdns','MasterDNS','MasterDnsVPN','DNS-туннель'),
       ('openflux','OpenFlux','OpenFlux','Транспорт через Яндекс / MAX'),
       ('trusttunnel','Trust Tunnel','TrustTunnel','Свой конфиг TrustTunnel'),
