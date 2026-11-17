@@ -109,7 +109,7 @@ def collect(panel,s):
     elif core=='webproxy':
         conn=UnixHTTPConnection(str(panel.DATA/s['id']/'runtime'/'metrics.sock'),timeout=5)
         try:
-            conn.request('GET','/metrics');response=conn.getresponse()
+            conn.request('GET','/metrics',headers={'Host':'localhost'});response=conn.getresponse()
             if response.status!=200:raise ValueError('WebProxy metrics недоступны')
             counters=webproxy_counters(response.read(4_000_000).decode(),users)
         finally:conn.close()

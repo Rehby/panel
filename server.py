@@ -29,6 +29,7 @@ import threading
 import time
 import zipfile
 import uuid
+from contextlib import contextmanager
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
@@ -62,7 +63,12 @@ def init():
     return auth.initialize(DATA)
 
 
-def db():return sqlite3.connect(str(DATA/'panel.sqlite3'))
+@contextmanager
+def db():
+    connection=sqlite3.connect(str(DATA/'panel.sqlite3'))
+    try:
+        with connection:yield connection
+    finally:connection.close()
 def rows(kind):
     with db() as c:return [json.loads(r[0]) for r in c.execute('SELECT value FROM objects WHERE kind=? ORDER BY rowid DESC',(kind,))]
 def get(id,kind):
