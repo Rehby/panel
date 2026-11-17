@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import threading
 import time
@@ -44,6 +45,10 @@ def image_list():
 
 def command(args,job,cwd=None,timeout=1200):
     # Persist neither credentials nor environment; only known public repository URLs are used.
+    if job.get('stream'):
+        result=subprocess.run(args,cwd=cwd,stdout=sys.stderr,stderr=subprocess.STDOUT,text=True,timeout=timeout)
+        if result.returncode:raise ValueError('Команда завершилась с кодом '+str(result.returncode))
+        return ''
     with tempfile.TemporaryFile(mode='w+') as log:
         try:
             r=subprocess.run(args,cwd=cwd,stdout=log,stderr=subprocess.STDOUT,text=True,timeout=timeout)
@@ -66,23 +71,42 @@ def start_job(id,action,data_dir):
         job=dict(action=action,status='running',started=time.time(),log='');JOBS[id]=job
     def work():
         try:
-            if action=='check':
-                args=['docker','image','inspect',image['reference']] if image.get('recipe') else ['docker','manifest','inspect',image['reference']]
-                command(args,job,timeout=60)
-            elif action=='pull':command(['docker','pull',image['reference']],job,timeout=600)
-            else:
-                builds=Path(data_dir)/'image-builds';builds.mkdir(mode=0o700,exist_ok=True)
-                with tempfile.TemporaryDirectory(dir=builds) as tmp:
-                    context=Path(tmp)/'source'
-                    command(['git','init',str(context)],job)
-                    command(['git','remote','add','origin',image['source']+'.git'],job,cwd=context)
-                    command(['git','fetch','--filter=blob:none','--no-tags','--depth','1','origin',image['revision']],job,cwd=context,timeout=180)
-                    if image.get('sparse'):command(['git','sparse-checkout','set',image['sparse']],job,cwd=context)
-                    command(['git','checkout','--detach','FETCH_HEAD'],job,cwd=context)
-                    dockerfile=Path(tmp)/'Dockerfile';shutil.copyfile(ROOT/'images'/image['recipe'],dockerfile)
-                    command(['docker','build','--label','org.opencontainers.image.revision='+image['revision'],'-f',str(dockerfile),'-t',image['reference'],str(context)],job,timeout=1800)
+            prepare_image(image,action,data_dir,job)
             with LOCK:job.update(status='succeeded',finished=time.time())
         except Exception as e:
             with LOCK:job.update(status='failed',finished=time.time(),error=str(e))
     threading.Thread(target=work,daemon=True).start()
     return copy.deepcopy(job)
+
+
+def prepare_image(image,action,data_dir,job=None):
+    """Shared synchronous operation for the installer and background UI jobs."""
+    job=job if job is not None else dict(log='')
+    if action=='check':
+        args=['docker','image','inspect',image['reference']] if image.get('recipe') else ['docker','manifest','inspect',image['reference']]
+        command(args,job,timeout=60)
+    elif action=='pull':command(['docker','pull',image['reference']],job,timeout=600)
+    else:
+        builds=Path(data_dir)/'image-builds';builds.mkdir(mode=0o700,exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=builds) as tmp:
+            context=Path(tmp)/'source'
+            command(['git','init',str(context)],job)
+            command(['git','remote','add','origin',image['source']+'.git'],job,cwd=context)
+            command(['git','fetch','--filter=blob:none','--no-tags','--depth','1','origin',image['revision']],job,cwd=context,timeout=180)
+            if image.get('sparse'):command(['git','sparse-checkout','set',image['sparse']],job,cwd=context)
+            command(['git','checkout','--detach','FETCH_HEAD'],job,cwd=context)
+            dockerfile=Path(tmp)/'Dockerfile';shutil.copyfile(ROOT/'images'/image['recipe'],dockerfile)
+            command(['docker','build','--label','org.opencontainers.image.revision='+image['revision'],'-f',str(dockerfile),'-t',image['reference'],str(context)],job,timeout=1800)
+
+
+def install_images(data_dir):
+    """Build source recipes and pull registry images before the first panel start."""
+    import sys
+    for image in CATALOG:
+        action='build' if image.get('recipe') else 'pull'
+        print(('Сборка: ' if action=='build' else 'Скачивание: ')+image['name'],file=sys.stderr,flush=True)
+        job=dict(log='',stream=True)
+        try:prepare_image(image,action,data_dir,job)
+        except Exception:
+            print(job['log'],file=sys.stderr,flush=True)
+            raise

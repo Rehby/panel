@@ -89,7 +89,7 @@ def offline_change(database,path='',data=None):
     """Same password schema as v1.4.3; caller must prove the core is stopped."""
     passwords=database.setdefault('passwords',{});devices=database.setdefault('devices',{})
     now=int(time.time())
-    if data is None:return dict(passwords=[dict(entry,password=password) for password,entry in passwords.items() if not entry.get('expires_at') or entry['expires_at']>now])
+    if data is None:return dict(passwords=[dict(entry,password=password,**{k:entry.get(k,0) for k in ('up_bytes','down_bytes') if k not in entry}) for password,entry in passwords.items() if not entry.get('expires_at') or entry['expires_at']>now])
     password=data.get('password')
     if not path:
         for key,entry in list(passwords.items()):
@@ -119,4 +119,38 @@ def offline_change(database,path='',data=None):
 def subscription(s,u):
     return dict(version=1,subscriptionName=u['name'],description='Персональная подписка qWDTT',updatedAt=datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='seconds'),profiles=[dict(name=u['name'],peer=f"{s['host']}:{s['port']}",hashes=u['vk_hash'],workers=16,port=s['local_port'],password=u['password'],expiresAt=u.get('expires_at',0))])
 
-def available(u):return u.get('enabled',True) and (not u.get('expires_at') or u['expires_at']>time.time())
+def available(u):return not u.get('quota_blocked') and u.get('enabled',True) and (not u.get('expires_at') or u['expires_at']>time.time())
+
+
+def counters(view,users):
+    """Read password counters from the stock qWDTT 1.4.3 admin API."""
+    entries=view if isinstance(view,list) else view.get('passwords') if isinstance(view,dict) else None
+    if isinstance(entries,dict):entries=[dict(entry,password=password) for password,entry in entries.items()]
+    if not isinstance(entries,list) or not all(isinstance(entry,dict) and isinstance(entry.get('password'),str) for entry in entries):
+        raise ValueError('WDTT: некорректный ответ статистики')
+    by_password={entry['password']:entry for entry in entries};result={}
+    for u in users:
+        entry=by_password.get(u['password'])
+        if entry is None:
+            if u.get('expires_at') and u['expires_at']<=time.time():continue
+            raise ValueError('WDTT: доступ отсутствует в ответе статистики')
+        values=[]
+        for field in ('up_bytes','down_bytes'):
+            raw=entry.get(field)
+            if isinstance(raw,bool) or not (isinstance(raw,int) or isinstance(raw,str) and re.fullmatch(r'[0-9]+',raw)) or int(raw)<0:
+                raise ValueError('WDTT: ядро не вернуло корректные счётчики трафика')
+            values.append(int(raw))
+        result[u['id']]=values
+    return result
+
+
+def sync_limits(panel,s):
+    """Apply quota restrictions through the core API, preserving manual revocation."""
+    for u in panel.members(s['id']):
+        blocked=bool(u.get('quota_blocked'))
+        if not blocked and not u.get('wdtt_quota_applied'):continue
+        if u.get('expires_at') and u['expires_at']<=time.time():
+            u['wdtt_quota_applied']=blocked;panel.put('user',u);continue
+        desired=bool(u.get('enabled',True)) and not blocked
+        panel.turn_request(s,'/activate' if desired else '/deactivate',dict(password=u['password']))
+        u['wdtt_quota_applied']=blocked;panel.put('user',u)

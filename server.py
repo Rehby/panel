@@ -7,6 +7,7 @@ import geolocation
 import minimal
 import subscriptions
 import webproxy
+import traffic
 import system_status
 import provision
 import wdtt
@@ -23,6 +24,7 @@ import secrets
 import shutil
 import sqlite3
 import subprocess
+import sys
 import threading
 import time
 import zipfile
@@ -44,6 +46,7 @@ def init():
     with db() as c:
         c.execute('CREATE TABLE IF NOT EXISTS objects (id TEXT PRIMARY KEY, kind TEXT NOT NULL, value TEXT NOT NULL)')
         c.execute('CREATE TABLE IF NOT EXISTS events (at INTEGER, message TEXT)')
+        traffic.init(c)
         # Existing access tokens and keys remain valid; each legacy access becomes a person.
         for object_id,value in c.execute("SELECT id,value FROM objects WHERE kind='user'").fetchall():
             u=json.loads(value)
@@ -77,6 +80,7 @@ def event(msg):
 def members(id):return [u for u in rows('user') if u['service_id']==id]
 def compose(s,args,timeout=30,input=None):
     if os.environ.get('YPTUN_ALLOW_DOCKER')!='1':raise ValueError('Запуск отключён. Установите YPTUN_ALLOW_DOCKER=1 на хосте панели')
+    if args and args[0] in ('up','down','restart'):traffic.snapshot(sys.modules[__name__],s)
     if s['protocol']=='webproxy' and 'up' in args:
         certificate_helper(dict(action='webproxy-route',id=s['id'],host=s['host'],port=s['port']))
     try:
@@ -87,7 +91,7 @@ def compose(s,args,timeout=30,input=None):
 
 def write_bundle(s):
     directory=DATA/s['id'];directory.mkdir(mode=0o700,exist_ok=True)
-    if s.get('image_id')=='warp' or s['protocol']=='wdtt':(directory/'runtime').mkdir(mode=0o700,exist_ok=True)
+    if s.get('image_id')=='warp' or s['protocol'] in ('wdtt','webproxy'):(directory/'runtime').mkdir(mode=0o700,exist_ok=True)
     for name,body in bundle(s,members(s['id'])).items():
         target=directory/name;target.parent.mkdir(mode=0o700,parents=True,exist_ok=True);tmp=target.with_name(target.name+'.tmp');tmp.write_bytes(body) if isinstance(body,bytes) else tmp.write_text(body);os.chmod(tmp,0o600);tmp.replace(target)
 
@@ -105,8 +109,9 @@ def sync(s):
     if s['protocol']=='webproxy' and s.get('desired')!='running' and os.environ.get('YPTUN_HTTPS_HELPER')=='1':
         certificate_helper(dict(action='webproxy-route',id=s['id'],remove=True))
     if s.get('desired')=='running':
-        if (BY_ID[s['protocol']]['mode']=='native' or s.get('provisioned')) and not any(u['enabled'] for u in members(s['id'])):
+        if (BY_ID[s['protocol']]['mode']=='native' or s.get('provisioned')) and not any(u['enabled'] and not u.get('quota_blocked') for u in members(s['id'])):
             # Empty Hysteria2 user lists must never become an unauthenticated live listener.
+            if any(u['enabled'] and u.get('quota_blocked') for u in members(s['id'])):s['quota_stopped']=True
             compose(s,['down']);s['desired']='stopped';put('service',s)
         else:compose(s,['up','-d','--force-recreate'],120)
 
@@ -207,8 +212,13 @@ def prepare_service(data):
         managed=certificate_helper(dict(action='read-panel-certificate') if s['certificate_id']=='panel' else dict(action='read-service-certificate',certificate_id=s['certificate_id']))
         s.update(certificate=managed['certificate'],private_key=managed['private_key'])
         if s['certificate_id']=='panel':s['sni']=managed['host']
+    override=str(s.get('image_override') or '').strip()
+    if override and not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9._/:@-]*',override):raise ValueError('Некорректное имя Docker-образа')
+    s['image_override']=override
     s=minimal.apply(s)
     s=validate(s)
+    telemetry_defaults(s)
+    if traffic.kind(s):s['traffic_enabled']=True
     if s['protocol']=='webproxy':
         if s['host']==https_status().get('host','').lower():raise ValueError('WebProxy: используйте отдельный домен, отличный от домена панели')
         if any(x['id']!=s.get('id') and x['protocol']=='webproxy' and x['host']==s['host'] for x in rows('service')):raise ValueError('Этот домен уже используется WebProxy')
@@ -239,7 +249,17 @@ def service_defaults(protocol,exclude_port=None):
         reserved.add(port)
     return defaults.setup(protocol,https_status().get('host',''),reserved)
 
-def bound_ports(s):return {s['port']}|({s['admin_port']} if s['protocol']=='wdtt' and s.get('admin_port') else set())
+def telemetry_defaults(s):
+    if traffic.kind(s)=='xray' and not s.get('stats_port'):
+        reserved={22,80,443,8080,9443,s['port']}
+        for other in rows('service'):reserved.update(bound_ports(other))
+        s['stats_port']=defaults.free_port(s['protocol'],reserved)
+    if s.get('stats_port'):
+        s['stats_port']=int(s['stats_port'])
+        if not 1024<=s['stats_port']<=65535 or s['stats_port'] in (s['port'],22,80,443,8080,9443):raise ValueError('Некорректный порт статистики')
+
+
+def bound_ports(s):return {s['port']}|({s['stats_port']} if s.get('stats_port') else set())|({s['admin_port']} if s['protocol']=='wdtt' and s.get('admin_port') else set())
 
 def turn_request(s,path='',data=None):
     try:return wdtt.request(s,path,data)
@@ -319,6 +339,10 @@ def update_turn_hashes(s,users,value):
 
 def mutate(path,data):
     parts=path.strip('/').split('/');kind=parts[1];id=parts[2] if len(parts)>2 else None;action=parts[3] if len(parts)>3 else None
+    if kind in ('users','services'):
+        previous=get(id,'user' if kind=='users' else 'service') if id else None
+        current=get(previous['service_id'],'service') if previous and kind=='users' else previous if previous else get(data['service_id'],'service') if kind=='users' and data.get('service_id') else None
+        if current:traffic.snapshot(sys.modules[__name__],current)
     if kind=='service-defaults':return service_defaults(data.get('protocol'),data.get('exclude_port'))
     if kind=='turn-hashes':
         values=wdtt.hashes(data.get('hashes','')).split(',')
@@ -333,11 +357,21 @@ def mutate(path,data):
             put('person',person);event('Создан пользователь: '+person['name']);return person
         person=get(id,'person')
         if action=='edit':person['name']=person_name(data);put('person',person);return person
+        if action=='traffic':
+            traffic.poll(sys.modules[__name__])
+            person=get(id,'person')
+            person['traffic_limit']=traffic.validate_limit(sys.modules[__name__],person,data.get('limit_bytes',person.get('traffic_limit',0)))
+            if data.get('reset') is True:
+                with db() as c:c.execute('UPDATE traffic SET upload=0,download=0 WHERE person_id=?',(id,))
+            put('person',person);traffic.enforce(sys.modules[__name__])
+            event('Изменён лимит трафика: '+person['name']);return traffic.summary(sys.modules[__name__],get(id,'person'))
         if action=='rotate':person['token']=secrets.token_urlsafe(32);put('person',person);return person
         if action=='grant':return mutate('/api/users',dict(data,person_id=id))
         if action=='delete':
             if any(u.get('person_id')==id for u in rows('user')):raise ValueError('Сначала удалите подключения пользователя')
-            remove(id);return {}
+            remove(id)
+            with db() as c:c.execute('DELETE FROM traffic WHERE person_id=?',(id,))
+            return {}
         raise ValueError('Неизвестное действие пользователя')
     if kind=='services':
         if not id:
@@ -371,9 +405,9 @@ def mutate(path,data):
                     raise
             event('Изменена служба: '+s['name']);return {}
         if action in ('start','restart','stop'):
-            if action=='stop':compose(s,['down']);s['desired']='stopped'
+            if action=='stop':compose(s,['down']);s['desired']='stopped';s.pop('quota_stopped',None)
             else:
-                if (BY_ID[s['protocol']]['mode']=='native' or s.get('provisioned')) and not any(u['enabled'] for u in members(id)):raise ValueError('Сначала добавьте активного пользователя')
+                if (BY_ID[s['protocol']]['mode']=='native' or s.get('provisioned')) and not any(u['enabled'] and not u.get('quota_blocked') for u in members(id)):raise ValueError('Сначала добавьте активного пользователя')
                 write_bundle(s);compose(s,['up','-d'] if action=='start' else ['up','-d','--force-recreate'],120);s['desired']='running'
             put('service',s);event(s['name']+': '+action);return dict(running=running(s))
         if action=='delete':
@@ -386,6 +420,8 @@ def mutate(path,data):
         if not id:
             if data.get('person_id'):get(data['person_id'],'person')
             s=get(data.get('service_id',''),'service')
+            owner=get(data['person_id'],'person') if data.get('person_id') else {}
+            if owner.get('traffic_limit') and not traffic.kind(s):raise ValueError('Для пользователя с лимитом выберите службу с учётом трафика')
             data=dict(data)
             automatic=data.get('auto_name') is True or (bool(data.get('person_id')) and not str(data.get('name') or '').strip())
             if automatic:
@@ -397,12 +433,16 @@ def mutate(path,data):
                 require_turn_slot(s)
                 view=turn_request(s,data=wdtt.user_fields(s,data))
                 u=wdtt.apply_view(dict(id=secrets.token_hex(8),name=data['name'],service_id=s['id'],token=secrets.token_urlsafe(32),auto_name=automatic),view)
-                try:save_access(u,data.get('person_id'),new_person_name)
+                u['quota_blocked']=bool(owner.get('quota_exceeded'))
+                try:
+                    if u['quota_blocked']:
+                        turn_request(s,'/deactivate',dict(password=u['password']));u['wdtt_quota_applied']=True
+                    save_access(u,data.get('person_id'),new_person_name)
                 except Exception:turn_request(s,'/delete',dict(password=u['password']));raise
                 event('Выдан доступ TURN: '+u['name']);return u
             if not str(data.get('name','')).strip() or len(data['name'])>100:raise ValueError('Укажите имя пользователя до 100 символов')
             if s['protocol']=='shadowsocks' and members(s['id']):raise ValueError('Shadowsocks: создайте отдельную службу для второго пользователя')
-            u=dict(id=secrets.token_hex(8),name=data['name'],service_id=s['id'],enabled=True,token=secrets.token_urlsafe(32),profile=data.get('profile',''),auto_name=automatic,**credential())
+            u=dict(id=secrets.token_hex(8),name=data['name'],service_id=s['id'],enabled=True,token=secrets.token_urlsafe(32),profile=data.get('profile',''),auto_name=automatic,quota_blocked=bool(owner.get('quota_exceeded')),**credential())
             if s['protocol']=='webproxy':u['webproxy_secret']=webproxy.secret(data.get('webproxy_secret'))
             if s.get('provisioned'):
                 u['vk_hash']=data.get('vk_hash','')
@@ -435,16 +475,21 @@ def mutate(path,data):
                 except wdtt.CoreNotFound:pass
                 remove(id)
             elif action in ('toggle','edit'):
+                manual_enabled=not u['enabled'] if action=='toggle' else u['enabled']
                 fields=dict(password=u['password'])
                 if action=='edit':
                     fields.update(wdtt.user_fields(s,data));path='/update'
                     if not data.get('days') and (not u.get('expires_at') or u['expires_at']>time.time()):fields.pop('days',None)
-                else:path='/deactivate' if u['enabled'] else '/activate'
+                else:path='/activate' if manual_enabled and not u.get('quota_blocked') else '/deactivate'
                 if action=='edit' and u.get('expires_at',0) and u['expires_at']<=time.time():
                     fields.pop('password',None);view=turn_request(s,data=fields)
                 else:view=turn_request(s,path,fields)
                 if action=='edit' and data.get('name')!=u['name']:u['auto_name']=False
-                u=wdtt.apply_view(u,view);put('user',u)
+                u=wdtt.apply_view(u,view);u['enabled']=manual_enabled
+                if not view.get('is_deactivated') and (not manual_enabled or u.get('quota_blocked')):
+                    turn_request(s,'/deactivate',dict(password=u['password']))
+                if u.get('quota_blocked'):u['wdtt_quota_applied']=True
+                put('user',u)
             else:raise ValueError('Неизвестное действие TURN')
             event('Доступ TURN '+u['name']+': '+action);return {}
         if action=='edit':
@@ -562,8 +607,12 @@ class Handler(BaseHTTPRequestHandler):
                         with db() as c:events=[dict(at=r[0],message=r[1]) for r in c.execute('SELECT at,message FROM events ORDER BY rowid DESC LIMIT 30')]
                         users=rows('user')
                         for u in users:
+                            u['traffic']=traffic.access_summary(sys.modules[__name__],u)
                             for k in ('password','uuid','profile','wg_private','wg_psk','webproxy_secret'):u.pop(k,None)
-                        return self.send(200,dict(protocols=PROTOCOLS,transports=TRANSPORTS,image_catalog=images.CATALOG,services=services,users=users,people=rows('person'),events=events,docker_enabled=os.environ.get('YPTUN_ALLOW_DOCKER')=='1',https=https_status(),base_path=auth.CONFIG['base_path'],username=auth.CONFIG['username']))
+                        people=rows('person')
+                        for person in people:person['traffic']=traffic.summary(sys.modules[__name__],person)
+                        for service in services:service['traffic_supported']=bool(traffic.kind(service))
+                        return self.send(200,dict(protocols=PROTOCOLS,transports=TRANSPORTS,image_catalog=images.CATALOG,services=services,users=users,people=people,events=events,docker_enabled=os.environ.get('YPTUN_ALLOW_DOCKER')=='1',https=https_status(),base_path=auth.CONFIG['base_path'],username=auth.CONFIG['username']))
                     parts=path.strip('/').split('/')
                     if len(parts)==4 and parts[1]=='users' and parts[3]=='settings':return self.send(200,get(parts[2],'user'))
                     if len(parts)==4 and parts[1]=='users' and parts[3]=='config':
@@ -624,4 +673,5 @@ if __name__=='__main__':
     host=os.environ.get('YPTUN_HOST','127.0.0.1');port=int(os.environ.get('YPTUN_PORT','8080'))
     print(f"panel for YPtun: http://{host}:{port}{auth.CONFIG['base_path']}/",flush=True)
     if created:print('Создан администратор: '+created['username']+' / '+created['password'],flush=True)
+    traffic.start(sys.modules[__name__])
     ThreadingHTTPServer((host,port),Handler).serve_forever()

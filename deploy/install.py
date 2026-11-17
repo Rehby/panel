@@ -36,6 +36,8 @@ def install():
     hook=Path('/etc/letsencrypt/renewal-hooks/deploy/yptun-nginx');hook.parent.mkdir(parents=True,exist_ok=True);hook.write_text('#!/bin/sh\n/usr/sbin/nginx -t && /usr/bin/systemctl reload nginx\n/usr/local/sbin/yptun-cert-sync\n');os.chmod(hook,0o755)
     print('Запуск служб Docker, nginx и certbot.timer…',file=sys.stderr,flush=True)
     run(['systemctl','daemon-reload']);run(['systemctl','enable','--now','docker','nginx','certbot.timer'])
+    print('Подготовка образов движков (может занять несколько минут)…',file=sys.stderr,flush=True)
+    run(['runuser','-u','yptun','--','env','YPTUN_ALLOW_DOCKER=1','python3','-B',str(ROOT/'deploy'/'prepare-images.py'),str(data)])
     print('Запуск панели…',file=sys.stderr,flush=True)
     run(['systemctl','enable','yptun-panel']);run(['systemctl','restart','yptun-panel'])
     print(json.dumps(info))
