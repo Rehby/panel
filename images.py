@@ -79,7 +79,9 @@ def start_job(id,action,data_dir,force=True,restart_services=None):
             if action=='check-updates':
                 result=image_updates.check_one(image,force=force)
                 if result.get('error'):raise ValueError(result['error'])
-            elif action=='update':image_updates.apply_update(image,data_dir,job,prepare_image,command,restart_services=restart_services)
+            elif action=='update':
+                selected=image_updates.apply_update(image,data_dir,job,prepare_image,command,restart_services=restart_services)
+                with LOCK:job['reference']=selected['reference']
             else:prepare_image(image_updates.current(image),action,data_dir,job)
             with LOCK:job.update(status='succeeded',finished=time.time())
         except Exception as e:

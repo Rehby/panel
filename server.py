@@ -184,11 +184,11 @@ def restart_image_services(image,selected,job):
                     restored.append(s['name'])
                 except Exception:pass
             failed=[s['name'] for s,_ in touched if s['name'] not in restored]
-            job['restored_services']=restored;job['recovery_failed_services']=failed
+            with images.LOCK:job['restored_services']=restored;job['recovery_failed_services']=failed
             event('Ошибка применения обновления образа '+image['name']+(': проверьте '+', '.join(failed) if failed else '; прежние версии восстановлены'))
             if failed:raise ValueError('Не удалось применить обновление и восстановить службы: '+', '.join(failed)) from error
             raise ValueError('Обновление не применено; прежние версии служб восстановлены: '+str(error)) from error
-        job['restarted_services']=restarted
+        with images.LOCK:job['restarted_services']=restarted
         if restarted:event('Обновлён образ '+image['name']+'; перезапущены службы: '+', '.join(restarted))
 
 

@@ -209,4 +209,4 @@ def apply_update(image,data_dir,job,prepare,command,restart_services=None):
         if previous_local and previous_local.get('Id') and target['reference']==active['reference']:
             command(['docker','tag',previous_local['Id'],active['reference']],job,timeout=30)
         raise
-    with LOCK:job['reference']=selected['reference']
+    return selected
