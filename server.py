@@ -44,6 +44,7 @@ LOCK=threading.RLock()
 def init():
     DATA.mkdir(mode=0o700,parents=True,exist_ok=True)
     os.chmod(DATA,0o700)
+    images.image_updates.configure(DATA,images.CATALOG)
     with db() as c:
         c.execute('CREATE TABLE IF NOT EXISTS objects (id TEXT PRIMARY KEY, kind TEXT NOT NULL, value TEXT NOT NULL)')
         c.execute('CREATE TABLE IF NOT EXISTS events (at INTEGER, message TEXT)')
@@ -131,6 +132,66 @@ def rollback(s):
         except ValueError:event('Не удалось восстановить контейнер после ошибки; проверьте службу: '+s['name'])
 
 
+def container_image(s,name):
+    """Read the actual running image, including an older generation of a mutable tag."""
+    id=compose(s,['ps','-q',name],10).strip()
+    if not id:return None
+    result=subprocess.run(['docker','inspect','--format','{{json .State.Running}} {{.Image}}',id],capture_output=True,text=True,timeout=10)
+    if result.returncode:raise ValueError('Не удалось проверить образ контейнера: '+s['name'])
+    fields=result.stdout.strip().split()
+    if len(fields)!=2 or fields[0]!='true':return None
+    if not re.fullmatch(r'sha256:[a-f0-9]{64}',fields[1]):raise ValueError('Docker вернул некорректный ID образа')
+    return fields[1]
+
+
+def restart_image_services(image,selected,job):
+    """Roll out a catalog update to its running consumers; restore them on failure."""
+    restored=[];restarted=[];touched=[]
+    with LOCK:
+        try:
+            for s in rows('service'):
+                if s.get('desired')!='running':continue
+                if BY_ID[s['protocol']]['mode']=='custom' and not s.get('provisioned'):continue
+                files=bundle(s,members(s['id']))
+                config=json.loads(files['compose.json'])
+                main='warp' if s['protocol']=='warp' and s.get('provisioned') else 'tunnel'
+                targets=[name for name,service in config['services'].items() if service.get('image')==selected['reference'] and not (s.get('image_override') and name==main)]
+                if not targets:continue
+                actual={name:container_image(s,name) for name in targets}
+                actual={name:value for name,value in actual.items() if value}
+                if not actual or all(value==selected['image_id'] for value in actual.values()):continue
+                directory=DATA/s['id']
+                previous={name:(directory/name).read_bytes() for name in files if (directory/name).is_file()}
+                if 'compose.json' not in previous:raise ValueError('Нет сохранённой конфигурации службы: '+s['name'])
+                # Pin old image IDs for recovery: latest may already name the new image.
+                old=json.loads(previous['compose.json'])
+                for name,value in actual.items():old['services'][name]['image']=value
+                previous['compose.json']=json.dumps(old,indent=2).encode()
+                traffic.snapshot(sys.modules[__name__],s)
+                touched.append((s,previous))
+                write_bundle(s)
+                compose(s,['up','-d','--force-recreate','--wait','--wait-timeout','45'],120)
+                if any(container_image(s,name)!=selected['image_id'] for name in actual):
+                    raise ValueError('Новая версия не запустилась: '+s['name'])
+                restarted.append(s['name'])
+        except Exception as error:
+            for s,previous in reversed(touched):
+                try:
+                    for name,body in previous.items():
+                        target=DATA/s['id']/name;tmp=target.with_name(target.name+'.tmp')
+                        tmp.write_bytes(body);os.chmod(tmp,0o600);tmp.replace(target)
+                    compose(s,['up','-d','--force-recreate','--pull','never','--wait','--wait-timeout','45'],120)
+                    restored.append(s['name'])
+                except Exception:pass
+            failed=[s['name'] for s,_ in touched if s['name'] not in restored]
+            job['restored_services']=restored;job['recovery_failed_services']=failed
+            event('Ошибка применения обновления образа '+image['name']+(': проверьте '+', '.join(failed) if failed else '; прежние версии восстановлены'))
+            if failed:raise ValueError('Не удалось применить обновление и восстановить службы: '+', '.join(failed)) from error
+            raise ValueError('Обновление не применено; прежние версии служб восстановлены: '+str(error)) from error
+        job['restarted_services']=restarted
+        if restarted:event('Обновлён образ '+image['name']+'; перезапущены службы: '+', '.join(restarted))
+
+
 def https_status():
     path=Path(os.environ.get('YPTUN_HTTPS_STATUS','/etc/yptun-panel/https.json'))
     if path.exists():return json.loads(path.read_text())
@@ -152,7 +213,7 @@ def generate_certificate(data):
 
 def create_openflux_rooms():
     if os.environ.get('YPTUN_ALLOW_DOCKER')!='1':raise ValueError('Для создания комнат cups.online включите управление Docker')
-    image=images.BY_IMAGE['openflux']['reference']
+    image=images.image_updates.current(images.BY_IMAGE['openflux'])['reference']
     try:
         result=subprocess.run(['docker','run','--rm','-i','--pull=never',image,'--node-wizard'],input='{"id":1,"method":"createRooms"}\n',capture_output=True,text=True,timeout=140)
     except (OSError,subprocess.TimeoutExpired) as e:
@@ -354,7 +415,7 @@ def mutate(path,data):
         values=wdtt.hashes(data.get('hashes','')).split(',')
         for value in values:put('turnhash',dict(id='turnhash:'+value,value=value))
         return dict(hashes=[x['value'] for x in rows('turnhash')])
-    if kind=='images':return images.start_job(id,action,DATA)
+    if kind=='images':return images.start_job(id,action,DATA,force=data.get('force',True),restart_services=restart_image_services)
     if kind=='certificates':return generate_certificate(data)
     if kind=='https':return configure_https(data)
     if kind=='people':
@@ -602,6 +663,7 @@ class Handler(BaseHTTPRequestHandler):
                 if path=='/api/system':return self.send(200,system_status.status())
                 with LOCK:
                     if path=='/api/turn-hashes':return self.send(200,dict(hashes=[x['value'] for x in rows('turnhash')]))
+                    if path=='/api/image-updates':return self.send(200,images.image_updates.summary())
                     if path=='/api/images':return self.send(200,images.image_list())
                     if path=='/api/https':return self.send(200,https_status())
                     if path=='/api/state':
@@ -618,7 +680,7 @@ class Handler(BaseHTTPRequestHandler):
                         people=rows('person')
                         for person in people:person['traffic']=traffic.summary(sys.modules[__name__],person)
                         for service in services:service['traffic_supported']=bool(traffic.kind(service))
-                        return self.send(200,dict(protocols=PROTOCOLS,transports=TRANSPORTS,image_catalog=images.CATALOG,services=services,users=users,people=people,events=events,docker_enabled=os.environ.get('YPTUN_ALLOW_DOCKER')=='1',https=https_status(),base_path=auth.CONFIG['base_path'],username=auth.CONFIG['username']))
+                        return self.send(200,dict(protocols=PROTOCOLS,transports=TRANSPORTS,image_catalog=images.CATALOG,image_updates=images.image_updates.summary(),services=services,users=users,people=people,events=events,docker_enabled=os.environ.get('YPTUN_ALLOW_DOCKER')=='1',https=https_status(),base_path=auth.CONFIG['base_path'],username=auth.CONFIG['username']))
                     parts=path.strip('/').split('/')
                     if len(parts)==4 and parts[1]=='users' and parts[3]=='settings':return self.send(200,get(parts[2],'user'))
                     if len(parts)==4 and parts[1]=='users' and parts[3]=='config':

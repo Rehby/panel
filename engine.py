@@ -2,6 +2,7 @@ import base64
 import wdtt
 import webproxy
 import traffic
+import images
 import provision
 import ipaddress
 import json
@@ -88,6 +89,12 @@ def validate(s):
 def bundle(s, users):
     users=[dict(u,enabled=u.get('enabled',True) and not u.get('quota_blocked')) for u in users]
     files=traffic.configure(s,_bundle(s,users))
+    compose=json.loads(files['compose.json'])
+    if BY_ID[s['protocol']]['mode']!='custom' or s.get('provisioned'):
+        for service in compose['services'].values():
+            for image in images.CATALOG:
+                if service.get('image')==image['reference']:service['image']=images.image_updates.current(image)['reference']
+    files['compose.json']=json.dumps(compose,indent=2)
     if s.get('image_override'):
         compose=json.loads(files['compose.json'])
         main='warp' if s['protocol']=='warp' and s.get('provisioned') else 'tunnel'

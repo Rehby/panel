@@ -1,5 +1,6 @@
 """Audited registry references and pinned source build recipes. No arbitrary build URLs."""
 import copy
+import image_updates
 import json
 import os
 from pathlib import Path
@@ -40,7 +41,7 @@ def image_list():
             if r.returncode==0:local=set(r.stdout.splitlines())
         except (OSError,subprocess.TimeoutExpired):pass
     with LOCK:
-        return [dict(i,kind='build' if i.get('recipe') else 'registry',verified_at=None if i.get('recipe') else AUDIT,local=i['reference'] in local,job=copy.deepcopy(JOBS.get(i['id']))) for i in CATALOG]
+        return [dict(image_updates.current(i),update=image_updates.snapshot(i['id']),kind='build' if i.get('recipe') else 'registry',verified_at=None if i.get('recipe') else AUDIT,local=image_updates.current(i)['reference'] in local,job=copy.deepcopy(JOBS.get(i['id']))) for i in CATALOG]
 
 
 def command(args,job,cwd=None,timeout=1200):
@@ -59,11 +60,15 @@ def command(args,job,cwd=None,timeout=1200):
         return output
 
 
-def start_job(id,action,data_dir):
+def start_job(id,action,data_dir,force=True,restart_services=None):
     if os.environ.get('YPTUN_ALLOW_DOCKER')!='1':raise ValueError('Управление Docker отключено')
+    if not isinstance(force,bool):raise ValueError('force должен быть логическим значением')
+    if action=='check-updates' and id=='all':
+        threading.Thread(target=image_updates.check_all,args=(CATALOG,force),daemon=True).start()
+        return dict(status='running')
     image=BY_IMAGE.get(id)
     if not image:raise ValueError('Неизвестный образ')
-    if action not in ('check','pull','build'):raise ValueError('Неизвестная операция с образом')
+    if action not in ('check','pull','build','check-updates','update'):raise ValueError('Неизвестная операция с образом')
     if action=='pull' and image.get('recipe'):raise ValueError('У этого движка нет найденного готового образа; выберите сборку')
     if action=='build' and not image.get('recipe'):raise ValueError('Для этого движка есть готовый образ; выберите скачивание')
     with LOCK:
@@ -71,7 +76,11 @@ def start_job(id,action,data_dir):
         job=dict(action=action,status='running',started=time.time(),log='');JOBS[id]=job
     def work():
         try:
-            prepare_image(image,action,data_dir,job)
+            if action=='check-updates':
+                result=image_updates.check_one(image,force=force)
+                if result.get('error'):raise ValueError(result['error'])
+            elif action=='update':image_updates.apply_update(image,data_dir,job,prepare_image,command,restart_services=restart_services)
+            else:prepare_image(image_updates.current(image),action,data_dir,job)
             with LOCK:job.update(status='succeeded',finished=time.time())
         except Exception as e:
             with LOCK:job.update(status='failed',finished=time.time(),error=str(e))
@@ -102,7 +111,9 @@ def prepare_image(image,action,data_dir,job=None):
 def install_images(data_dir):
     """Build source recipes and pull registry images before the first panel start."""
     import sys
-    for image in CATALOG:
+    image_updates.configure(data_dir,CATALOG)
+    for base in CATALOG:
+        image=image_updates.current(base)
         action='build' if image.get('recipe') else 'pull'
         print(('Сборка: ' if action=='build' else 'Скачивание: ')+image['name'],file=sys.stderr,flush=True)
         job=dict(log='',stream=True)
