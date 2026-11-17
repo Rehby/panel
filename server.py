@@ -6,6 +6,7 @@ import defaults
 import geolocation
 import minimal
 import subscriptions
+import webproxy
 import system_status
 import provision
 import wdtt
@@ -76,6 +77,8 @@ def event(msg):
 def members(id):return [u for u in rows('user') if u['service_id']==id]
 def compose(s,args,timeout=30,input=None):
     if os.environ.get('YPTUN_ALLOW_DOCKER')!='1':raise ValueError('Запуск отключён. Установите YPTUN_ALLOW_DOCKER=1 на хосте панели')
+    if s['protocol']=='webproxy' and 'up' in args:
+        certificate_helper(dict(action='webproxy-route',id=s['id'],host=s['host'],port=s['port']))
     try:
         r=subprocess.run(['docker','compose','-p','yptun-'+s['id'],'-f',str(DATA/s['id']/'compose.json'),*args],capture_output=True,text=True,timeout=timeout,input=input)
     except (OSError,subprocess.TimeoutExpired):raise ValueError('Docker недоступен или превышено время ожидания')
@@ -99,6 +102,8 @@ def running(s,strict=False):
 
 def sync(s):
     write_bundle(s)
+    if s['protocol']=='webproxy' and s.get('desired')!='running' and os.environ.get('YPTUN_HTTPS_HELPER')=='1':
+        certificate_helper(dict(action='webproxy-route',id=s['id'],remove=True))
     if s.get('desired')=='running':
         if (BY_ID[s['protocol']]['mode']=='native' or s.get('provisioned')) and not any(u['enabled'] for u in members(s['id'])):
             # Empty Hysteria2 user lists must never become an unauthenticated live listener.
@@ -204,6 +209,9 @@ def prepare_service(data):
         if s['certificate_id']=='panel':s['sni']=managed['host']
     s=minimal.apply(s)
     s=validate(s)
+    if s['protocol']=='webproxy':
+        if s['host']==https_status().get('host','').lower():raise ValueError('WebProxy: используйте отдельный домен, отличный от домена панели')
+        if any(x['id']!=s.get('id') and x['protocol']=='webproxy' and x['host']==s['host'] for x in rows('service')):raise ValueError('Этот домен уже используется WebProxy')
     if os.environ.get('YPTUN_HTTPS_HELPER')=='1' and s['port'] in (22,80,443,8080,9443):raise ValueError('Порт зарезервирован для SSH, HTTPS или панели; используйте, например, 8443')
     return s
 
@@ -370,6 +378,7 @@ def mutate(path,data):
             put('service',s);event(s['name']+': '+action);return dict(running=running(s))
         if action=='delete':
             if s.get('desired')=='running' or running(s):raise ValueError('Сначала остановите службу')
+            if s['protocol']=='webproxy' and os.environ.get('YPTUN_HTTPS_HELPER')=='1':certificate_helper(dict(action='webproxy-route',id=id,remove=True))
             for u in members(id):remove(u['id'])
             remove(id);shutil.rmtree(DATA/id,ignore_errors=True);event('Удалена служба: '+s['name']);return {}
         raise ValueError('Неизвестное действие')
@@ -394,6 +403,7 @@ def mutate(path,data):
             if not str(data.get('name','')).strip() or len(data['name'])>100:raise ValueError('Укажите имя пользователя до 100 символов')
             if s['protocol']=='shadowsocks' and members(s['id']):raise ValueError('Shadowsocks: создайте отдельную службу для второго пользователя')
             u=dict(id=secrets.token_hex(8),name=data['name'],service_id=s['id'],enabled=True,token=secrets.token_urlsafe(32),profile=data.get('profile',''),auto_name=automatic,**credential())
+            if s['protocol']=='webproxy':u['webproxy_secret']=webproxy.secret(data.get('webproxy_secret'))
             if s.get('provisioned'):
                 u['vk_hash']=data.get('vk_hash','')
                 u=provision.user(s,u,members(s['id']))
@@ -405,6 +415,7 @@ def mutate(path,data):
                 if not 8<=len(data['password'])<=255:raise ValueError('Пароль доступа: от 8 до 255 символов')
                 u['password']=data['password']
                 if any(other['password']==u['password'] for other in members(s['id'])):raise ValueError('Пароль уже используется в этой службе')
+            if s['protocol']=='webproxy' and any(x.get('webproxy_secret')==u['webproxy_secret'] for x in members(s['id'])):raise ValueError('Этот WebProxy secret уже используется')
             if BY_ID[s['protocol']]['mode']=='custom' and not s.get('provisioned') and not u['profile'].strip():raise ValueError('Для своего движка нужен готовый клиентский конфиг или URI')
             try:subscriptions.link(s,u)
             except ValueError:
@@ -454,6 +465,8 @@ def mutate(path,data):
             if s.get('provisioned') and s['protocol'] in ('wireguard','amneziawg','vkturn') and data.get('rotate_key'):
                 keys=provision.user(s,dict(u),[x for x in members(s['id']) if x['id']!=id])
                 for k in ('wg_private','wg_public','wg_psk'):u[k]=keys[k]
+            if s['protocol']=='webproxy' and data.get('webproxy_secret'):u['webproxy_secret']=webproxy.secret(data['webproxy_secret'])
+            if s['protocol']=='webproxy' and any(x['id']!=id and x.get('webproxy_secret')==u['webproxy_secret'] for x in members(s['id'])):raise ValueError('Этот WebProxy secret уже используется')
             subscriptions.link(s,u)
             put('user',u)
             try:sync(s)
@@ -528,7 +541,7 @@ class Handler(BaseHTTPRequestHandler):
                 u=next((u for u in rows('user') if hmac.compare_digest(u['token'],token)),None)
                 if not u or not wdtt.available(u):return self.send(404,'Подписка недоступна','text/plain; charset=utf-8')
                 s=get(u['service_id'],'service')
-                if not subscriptions.service_available(s):return self.send(404,'Подписка недоступна','text/plain; charset=utf-8')
+                if s['protocol']=='webproxy' or not subscriptions.service_available(s):return self.send(404,'Подписка недоступна','text/plain; charset=utf-8')
                 if s['protocol']=='wdtt':return self.send(200,wdtt.subscription(s,u))
                 body=profile(s,u)
                 if BY_ID[s['protocol']]['mode']=='native' and not body.lstrip().startswith('{'):body=base64.b64encode(body.encode()).decode()
@@ -549,7 +562,7 @@ class Handler(BaseHTTPRequestHandler):
                         with db() as c:events=[dict(at=r[0],message=r[1]) for r in c.execute('SELECT at,message FROM events ORDER BY rowid DESC LIMIT 30')]
                         users=rows('user')
                         for u in users:
-                            for k in ('password','uuid','profile','wg_private','wg_psk'):u.pop(k,None)
+                            for k in ('password','uuid','profile','wg_private','wg_psk','webproxy_secret'):u.pop(k,None)
                         return self.send(200,dict(protocols=PROTOCOLS,transports=TRANSPORTS,image_catalog=images.CATALOG,services=services,users=users,people=rows('person'),events=events,docker_enabled=os.environ.get('YPTUN_ALLOW_DOCKER')=='1',https=https_status(),base_path=auth.CONFIG['base_path'],username=auth.CONFIG['username']))
                     parts=path.strip('/').split('/')
                     if len(parts)==4 and parts[1]=='users' and parts[3]=='settings':return self.send(200,get(parts[2],'user'))

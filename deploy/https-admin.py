@@ -189,13 +189,72 @@ def service_certificate(data):
     temp=CONFIG/'service-certificates.tmp';temp.write_text(json.dumps(registry));os.chmod(temp,0o600);temp.replace(CONFIG/'service-certificates.json')
     return read_service_certificate(id)
 
+def webproxy_route(data):
+    """Install a domain vhost; relay ports stay on loopback behind nginx."""
+    id=str(data.get('id',''))
+    if not re.fullmatch(r'[a-f0-9]{16}',id):raise ValueError('Некорректный ID WebProxy')
+    target=NGINX.parent/('yptun-webproxy-'+id+'.conf')
+    old=target.read_text() if target.exists() else None
+    if data.get('remove') is True:
+        text=None
+    else:
+        host,is_ip=hostname(str(data.get('host','')))
+        if is_ip:raise ValueError('WebProxy требует домен')
+        port=int(data.get('port',0))
+        if not 1024<=port<=65535 or port in (8080,9443):raise ValueError('Некорректный внутренний порт WebProxy')
+        panel=json.loads((CONFIG/'https.json').read_text()) if (CONFIG/'https.json').exists() else {}
+        if panel.get('host')==host:raise ValueError('Для WebProxy нужен отдельный домен')
+        for other in NGINX.parent.glob('yptun-webproxy-*.conf'):
+            if other!=target and ('server_name '+host+';') in other.read_text():raise ValueError('Домен занят другим WebProxy')
+        import hashlib
+        cert_id=hashlib.sha256(('domain:'+host).encode()).hexdigest()[:24]
+        entry=certificate_registry().get(cert_id)
+        if not entry:
+            service_certificate(dict(host=host,mode='domain'))
+            entry=certificate_registry()[cert_id]
+        text=f'''server {{
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name {host};
+    ssl_certificate {entry['cert']};
+    ssl_certificate_key {entry['key']};
+    access_log off;
+    client_max_body_size 8m;
+    location / {{
+        proxy_pass http://127.0.0.1:{port};
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_buffering off;
+        proxy_request_buffering off;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }}
+}}
+'''
+    if text is None:target.unlink(missing_ok=True)
+    else:target.write_text(text)
+    try:
+        run(['nginx','-t']);run(['systemctl','reload','nginx'])
+    except Exception:
+        if old is None:target.unlink(missing_ok=True)
+        else:target.write_text(old)
+        # Reload the restored configuration if the first reload failed.
+        try:run(['nginx','-t']);run(['systemctl','reload','nginx'])
+        except Exception:pass
+        raise
+    return {}
+
+
 if __name__=='__main__':
     try:
         if os.geteuid()!=0:raise ValueError('Helper требует root')
         raw=sys.stdin.read(2_000_001)
         if len(raw)>2_000_000:raise ValueError('Слишком большой запрос')
         data=json.loads(raw);action=data.get('action','https')
-        if action=='service-certificate':result=service_certificate(data)
+        if action=='webproxy-route':result=webproxy_route(data)
+        elif action=='service-certificate':result=service_certificate(data)
         elif action=='read-service-certificate':result=read_service_certificate(data.get('certificate_id'))
         elif action=='read-panel-certificate':result=read_panel_certificate()
         elif action=='sync-certificates':run(['/usr/local/sbin/yptun-cert-sync']);result={}

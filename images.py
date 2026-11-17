@@ -12,6 +12,7 @@ import time
 ROOT=Path(__file__).resolve().parent
 AUDIT='2026-11-15'
 CATALOG=[
+ dict(id='webproxy',name='Telegram WebProxy',protocols=['webproxy'],reference='yptun/webproxy:44aa88ac176e',source='https://github.com/kesevone/tgwebproxy',revision='44aa88ac176ee89a9bf8cdf1b76227d8c653f2a1',recipe='webproxy.Dockerfile',command=['-config','/etc/yptun/relay.toml'],note='WEB-прокси Telegram с отдельными секретами. Нужен отдельный домен и HTTPS nginx панели.'),
  dict(id='wdtt',name='qWDTT 1.4.3 · TURN',protocols=['wdtt'],reference='yptun/wdtt:1.4.3',source='https://github.com/SpaceNeuroX/proxy-turn-vk-android',revision='fae121efc3ef57b633516601d3c0d6b1be1fde7c',recipe='wdtt.Dockerfile',sparse='server',command=[],note='Изолированный TURN-туннель с штатным API управления, до 10 пользователей. Нужен /dev/net/tun.'),
  dict(id='xray',name='Xray',protocols=['vless','vmess','trojan','shadowsocks','raw'],reference='ghcr.io/xtls/xray-core:26.9.30',source='https://github.com/XTLS/Xray-core',command=['run','-config','/etc/yptun/config.conf']),
  dict(id='singbox',name='sing-box',protocols=['hysteria2','raw'],reference='ghcr.io/sagernet/sing-box:v1.12.0',source='https://github.com/SagerNet/sing-box',command=['run','-c','/etc/yptun/config.conf']),

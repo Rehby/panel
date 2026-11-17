@@ -4,6 +4,7 @@ PROTOCOLS = [
     dict(id='vless', name='VLESS', core='Xray', mode='native', description='8 транспортов Xray · TLS / Reality · self-SNI'),
     dict(id='vmess', name='VMess', core='Xray', mode='native', description='TCP, WebSocket, gRPC · TLS'),
     dict(id='trojan', name='Trojan', core='Xray', mode='native', description='TCP, WebSocket, gRPC · TLS'),
+    dict(id='webproxy', name='Telegram · WebProxy', core='tgwebproxy', mode='native', description='HTTPS / WebSocket для Telegram · ссылка tg://webproxy · без подписки'),
     dict(id='shadowsocks', name='Shadowsocks', core='Xray', mode='native', description='ChaCha20-IETF-Poly1305'),
     dict(id='hysteria2', name='Hysteria2', core='sing-box', mode='native', description='QUIC · TLS · Salamander'),
     *[dict(id=i, name=n, core=c, mode='custom', description=d) for i,n,c,d in [

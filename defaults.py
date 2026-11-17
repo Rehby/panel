@@ -32,7 +32,7 @@ def free_port(protocol,reserved):
 def setup(protocol,host,reserved):
     if protocol not in BY_ID:raise ValueError('Неизвестный движок')
     port=free_port(protocol,reserved)
-    s=dict(protocol=protocol,name=service_name(protocol),host=host or '127.0.0.1',port=port,transport='tcp',security='reality' if protocol=='vless' else 'none' if protocol=='shadowsocks' else 'tls',sni=host or 'www.microsoft.com',path='/tunnel')
+    s=dict(protocol=protocol,name=service_name(protocol),host=host or '127.0.0.1',port=port,transport='tcp',security='reality' if protocol=='vless' else 'none' if protocol in ('shadowsocks','webproxy') else 'tls',sni=host or 'www.microsoft.com',path='/tunnel')
     image=next((i for i in CATALOG if protocol in i['protocols']),None)
     if image and BY_ID[protocol]['mode']=='custom':s.update(image_id=image['id'],image=image['reference'],command=image.get('command',[]))
     return s

@@ -1,5 +1,6 @@
 import base64
 import wdtt
+import webproxy
 import provision
 import ipaddress
 import json
@@ -35,9 +36,10 @@ def validate(s):
     if not 1 <= s['port'] <= 65535:
         raise ValueError('Порт должен быть от 1 до 65535')
     s['transport'] = s.get('transport','tcp')
-    s['security'] = s.get('security','tls')
+    s['security'] = s.get('security','none' if s['protocol']=='webproxy' else 'tls')
     s['sni'] = s.get('sni') or host
     s['path'] = s.get('path') or '/tunnel'
+    if s['protocol']=='webproxy':return webproxy.validate(s)
     if s['protocol']=='wdtt':return wdtt.validate(s)
     if s.get('provisioned'):return provision.prepare(s)
     if BY_ID[s['protocol']]['mode']=='custom':return validate_custom(s)
@@ -84,6 +86,7 @@ def validate(s):
 
 def bundle(s, users):
     p = s['protocol']
+    if p=='webproxy':return webproxy.bundle(s,users)
     if s.get('provisioned'):return provision.bundle(s,users)
     if p=='wdtt':return wdtt.bundle(s)
     clients = [u for u in users if u.get('enabled',True)]
@@ -135,6 +138,7 @@ def bundle(s, users):
 
 
 def profile(s,u):
+    if s['protocol']=='webproxy':return webproxy.link(s,u)
     if s.get('provisioned'):return provision.profile(s,u)
     if s['protocol']=='wdtt':return wdtt.link(s,u)
     p=s['protocol']; host=s['host']; host='['+host+']' if ':' in host else host

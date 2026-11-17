@@ -41,7 +41,7 @@ def feed(person,connections,services,available):
     links=[];unavailable=[]
     for u in connections:
         service=by_id.get(u['service_id'])
-        if u.get('person_id')!=person['id'] or not service or not service_available(service) or not available(u):continue
+        if u.get('person_id')!=person['id'] or not service or service['protocol']=='webproxy' or not service_available(service) or not available(u):continue
         try:links.append(link(service,u))
         except (ValueError,KeyError):unavailable.append(dict(name=u['name'],reason='Импортированный профиль требует совместимой ссылки YPtun'))
     result=dict(version=1,subscriptionName=person['name'],updatedAt=datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='seconds'),links=links)
