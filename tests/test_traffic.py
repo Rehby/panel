@@ -135,17 +135,4 @@ class TrafficTest(unittest.TestCase):
         self.assertEqual(traffic.webproxy_counters(text,[self.u])[self.u['id']],[120,230])
 
 
-class ImageInstallTest(unittest.TestCase):
-    def test_install_builds_recipes_and_pulls_registry_images(self):
-        items=[dict(id='build',name='Build',recipe='test.Dockerfile'),dict(id='registry',name='Registry')]
-        with patch.object(images,'CATALOG',items),patch.object(images,'prepare_image') as prepare:
-            images.install_images(Path('/tmp/data'))
-        self.assertEqual([call.args[1] for call in prepare.call_args_list],['build','pull'])
-
-    def test_failure_is_reported_and_stops_install(self):
-        items=[dict(name='Broken',recipe='test.Dockerfile'),dict(name='Later')]
-        with patch.object(images,'CATALOG',items),patch.object(images,'prepare_image',side_effect=ValueError('build failed')) as prepare:
-            with self.assertRaises(ValueError):images.install_images(Path('/tmp/data'))
-        self.assertEqual(prepare.call_count,1)
-
 if __name__=='__main__':unittest.main()

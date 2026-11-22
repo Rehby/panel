@@ -109,17 +109,3 @@ def prepare_image(image,action,data_dir,job=None):
             dockerfile=Path(tmp)/'Dockerfile';shutil.copyfile(ROOT/'images'/image['recipe'],dockerfile)
             command(['docker','build','--label','org.opencontainers.image.revision='+image['revision'],'-f',str(dockerfile),'-t',image['reference'],str(context)],job,timeout=1800)
 
-
-def install_images(data_dir):
-    """Build source recipes and pull registry images before the first panel start."""
-    import sys
-    image_updates.configure(data_dir,CATALOG)
-    for base in CATALOG:
-        image=image_updates.current(base)
-        action='build' if image.get('recipe') else 'pull'
-        print(('Сборка: ' if action=='build' else 'Скачивание: ')+image['name'],file=sys.stderr,flush=True)
-        job=dict(log='',stream=True)
-        try:prepare_image(image,action,data_dir,job)
-        except Exception:
-            print(job['log'],file=sys.stderr,flush=True)
-            raise
