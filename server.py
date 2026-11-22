@@ -604,10 +604,12 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self,*args):pass
     def send(self,status,body,ctype='application/json; charset=utf-8',headers=None):
         if not isinstance(body,bytes):body=(json.dumps(body,ensure_ascii=False) if ctype.startswith('application/json') else body).encode()
-        self.send_response(status);self.send_header('Content-Type',ctype);self.send_header('Content-Length',str(len(body)));self.send_header('Cache-Control','no-store');self.send_header('X-Content-Type-Options','nosniff');self.send_header('Referrer-Policy','no-referrer');self.send_header('X-Frame-Options','DENY')
-        self.send_header('Content-Security-Policy',"default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'")
-        for k,v in (headers or {}).items():self.send_header(k,v)
-        self.end_headers();self.wfile.write(body)
+        try:
+            self.send_response(status);self.send_header('Content-Type',ctype);self.send_header('Content-Length',str(len(body)));self.send_header('Cache-Control','no-store');self.send_header('X-Content-Type-Options','nosniff');self.send_header('Referrer-Policy','no-referrer');self.send_header('X-Frame-Options','DENY')
+            self.send_header('Content-Security-Policy',"default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'")
+            for k,v in (headers or {}).items():self.send_header(k,v)
+            self.end_headers();self.wfile.write(body)
+        except (BrokenPipeError,ConnectionResetError):pass  # Client disconnected before the response could be delivered.
     def session_token(self):
         cookie=SimpleCookie()
         try:cookie.load(self.headers.get('Cookie',''))

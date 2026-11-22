@@ -112,6 +112,17 @@ class PanelTest(unittest.TestCase):
         with patch.object(auth,'password_hash',return_value='wrong'):
             for _ in range(10):self.assertIsNone(auth.login('admin','wrong','rate-test'))
             with self.assertRaisesRegex(ValueError,'попыток'):auth.login('admin','wrong','rate-test')
+    def test_sessions_survive_reinitialize(self):
+        import auth
+        auth.initialize(server.DATA)
+        with patch.object(auth,'password_hash',side_effect=lambda password,salt:auth.CONFIG['password_hash']):
+            token=auth.login('admin','correct','restart-test')
+        self.assertTrue(auth.authenticated(token))
+        auth.initialize(server.DATA)
+        self.assertTrue(auth.authenticated(token))
+        auth.logout(token)
+        auth.initialize(server.DATA)
+        self.assertFalse(auth.authenticated(token))
     def test_duplicate_shadowsocks_user_rejected(self):
         s=self.service('shadowsocks');self.user(s)
         with self.assertRaises(ValueError):self.user(s)
