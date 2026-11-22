@@ -29,7 +29,7 @@ class RandomPortTest(unittest.TestCase):
    self.assertEqual(defaults.free_port('masterdns',set()),29453)
    rng.return_value.shuffle.assert_called_once()
  def test_random_ports_are_in_high_range(self):
-  for protocol in ('vless','vmess','trojan','shadowsocks','hysteria2','wdtt','wireguard','amneziawg','vkturn','masterdns','openflux','snolc','warp','raw'):
+  for protocol in ('vless','vmess','trojan','shadowsocks','hysteria2','mieru','wdtt','wireguard','amneziawg','vkturn','masterdns','openflux','snolc','warp','raw'):
    port=defaults.free_port(protocol,set());self.assertTrue(10000<=port<=65535)
 
 if __name__=='__main__':unittest.main()

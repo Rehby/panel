@@ -326,7 +326,9 @@ def telemetry_defaults(s):
         if not 1024<=s['stats_port']<=65535 or s['stats_port'] in (s['port'],22,80,443,8080,9443):raise ValueError('Некорректный порт статистики')
 
 
-def bound_ports(s):return {s['port']}|({s['stats_port']} if s.get('stats_port') else set())|({s['admin_port']} if s['protocol']=='wdtt' and s.get('admin_port') else set())
+def bound_ports(s):
+    ports={s['port']} if s['protocol']!='mieru' or not s.get('port_end') else set(range(s['port'],s['port_end']+1))
+    return ports|({s['stats_port']} if s.get('stats_port') else set())|({s['admin_port']} if s['protocol']=='wdtt' and s.get('admin_port') else set())
 
 def turn_request(s,path='',data=None):
     try:return wdtt.request(s,path,data)
@@ -518,7 +520,7 @@ def mutate(path,data):
                 try:u['uuid']=str(uuid.UUID(data['uuid']))
                 except ValueError:raise ValueError('Некорректный UUID')
                 if any(other['uuid']==u['uuid'] for other in members(s['id'])):raise ValueError('UUID уже используется в этой службе')
-            if s['protocol'] in ('trojan','shadowsocks','hysteria2','trusttunnel') and data.get('password'):
+            if s['protocol'] in ('trojan','shadowsocks','hysteria2','trusttunnel','mieru') and data.get('password'):
                 if not 8<=len(data['password'])<=255:raise ValueError('Пароль доступа: от 8 до 255 символов')
                 u['password']=data['password']
                 if any(other['password']==u['password'] for other in members(s['id'])):raise ValueError('Пароль уже используется в этой службе')
@@ -568,7 +570,7 @@ def mutate(path,data):
                 except ValueError:raise ValueError('Некорректный UUID')
                 if any(x['id']!=id and x.get('uuid')==u['uuid'] for x in members(s['id'])):raise ValueError('UUID уже используется')
             if data.get('password'):
-                if s['protocol'] not in ('trojan','shadowsocks','hysteria2','trusttunnel'):raise ValueError('Пароль здесь не используется')
+                if s['protocol'] not in ('trojan','shadowsocks','hysteria2','trusttunnel','mieru'):raise ValueError('Пароль здесь не используется')
                 if not 8<=len(data['password'])<=255:raise ValueError('Пароль: от 8 до 255 символов')
                 u['password']=data['password']
                 if any(x['id']!=id and x.get('password')==u['password'] for x in members(s['id'])):raise ValueError('Пароль уже используется')

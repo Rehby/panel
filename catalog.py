@@ -7,6 +7,7 @@ PROTOCOLS = [
     dict(id='webproxy', name='Telegram · WebProxy', core='tgwebproxy', mode='native', description='HTTPS / WebSocket для Telegram · ссылка tg://webproxy · без подписки'),
     dict(id='shadowsocks', name='Shadowsocks', core='Xray', mode='native', description='ChaCha20-IETF-Poly1305'),
     dict(id='hysteria2', name='Hysteria2', core='sing-box', mode='native', description='QUIC · TLS · Salamander'),
+    dict(id='mieru', name='Mieru', core='mita', mode='native', description='Диапазон TCP/UDP-портов · обфускация трафика · без TLS'),
     *[dict(id=i, name=n, core=c, mode='custom', description=d) for i,n,c,d in [
       ('wireguard','WireGuard','WireGuard','Свой конфиг и образ сервера'),
       ('amneziawg','AmneziaWG','AmneziaWG','wg-quick, параметры обфускации'),

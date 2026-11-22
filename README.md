@@ -42,6 +42,7 @@ sudo bash -c 'set -o pipefail; curl -fsSL https://raw.githubusercontent.com/Rehb
 | Telegram · WebProxy | Сервер tgwebproxy | HTTPS / WebSocket, отдельная ссылка `tg://webproxy`, без подписки |
 | Shadowsocks | Сервер | Один пароль на службу |
 | Hysteria2 | Сервер, сертификат панели | Отдельные пароли, опциональная Salamander |
+| Mieru | Сервер; диапазон TCP/UDP-портов | Отдельные пароли, ссылка `mierus://`; закреплённая сборка mita из исходников |
 | WireGuard / AmneziaWG | Сервер | Серверные ключи, отдельные пиры и IP, AWG 2.0 параметры автоматически |
 | VK-TURN / qWDTT | Сервер и общие VK-хеши звонков | Штатный Admin API, до 10 подписок на туннель |
 | VK-TURN / Free TURN | Сервер; при выдаче VK-хеши звонков | WireGuard-backend, пиры, ключ обфускации автоматически |

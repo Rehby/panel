@@ -1,4 +1,5 @@
 import base64
+import mieru
 import wdtt
 import webproxy
 import traffic
@@ -43,6 +44,7 @@ def validate(s):
     s['path'] = s.get('path') or '/tunnel'
     if s['protocol']=='webproxy':return webproxy.validate(s)
     if s['protocol']=='wdtt':return wdtt.validate(s)
+    if s['protocol']=='mieru':return mieru.validate(s)
     if s.get('provisioned'):return provision.prepare(s)
     if BY_ID[s['protocol']]['mode']=='custom':return validate_custom(s)
     if s['protocol'] in ('vless','vmess','trojan'):validate_transport(s)
@@ -108,6 +110,7 @@ def _bundle(s, users):
     if p=='webproxy':return webproxy.bundle(s,users)
     if s.get('provisioned'):return provision.bundle(s,users)
     if p=='wdtt':return wdtt.bundle(s)
+    if p=='mieru':return mieru.bundle(s,users)
     clients = [u for u in users if u.get('enabled',True)]
     files = {}
     if BY_ID[p]['mode'] == 'custom':
@@ -160,6 +163,7 @@ def profile(s,u):
     if s['protocol']=='webproxy':return webproxy.link(s,u)
     if s.get('provisioned'):return provision.profile(s,u)
     if s['protocol']=='wdtt':return wdtt.link(s,u)
+    if s['protocol']=='mieru':return mieru.link(s,u)
     p=s['protocol']; host=s['host']; host='['+host+']' if ':' in host else host
     addr=f"{host}:{s['port']}"; label=quote(u['name'] if u.get('auto_name') else s['name']+' · '+u['name'])
     if BY_ID[p]['mode']=='custom':
