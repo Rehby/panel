@@ -51,7 +51,9 @@ def bundle(s, users):
             ports.append(f"{port}:{port}/udp")
     service = dict(image=BY_IMAGE['mieru']['reference'], command=[],
                    volumes=['./mita-state.json:/etc/yptun/mita-state.json:ro', './runtime:/root/.config/mita'],
-                   ports=ports, restart='unless-stopped', cap_drop=['ALL'], cap_add=['NET_BIND_SERVICE'],
+                   # mita chowns/chmods its RPC socket; root also needs access
+                   # after the socket becomes owned by mita:mita with mode 0770.
+                   ports=ports, restart='unless-stopped', cap_drop=['ALL'], cap_add=['NET_BIND_SERVICE', 'CHOWN', 'FOWNER', 'DAC_OVERRIDE'],
                    security_opt=['no-new-privileges:true'],
                    logging=dict(driver='json-file', options={'max-size': '10m', 'max-file': '3'}))
     return {'mita-state.json': json.dumps(state, indent=2), 'compose.json': json.dumps(dict(services=dict(tunnel=service)), indent=2)}
