@@ -98,7 +98,7 @@ def compose(s,args,timeout=30,input=None):
 
 def write_bundle(s):
     directory=DATA/s['id'];directory.mkdir(mode=0o700,exist_ok=True)
-    if s.get('image_id')=='warp' or s['protocol'] in ('wdtt','webproxy'):(directory/'runtime').mkdir(mode=0o700,exist_ok=True)
+    if s.get('image_id')=='warp' or s['protocol'] in ('wdtt','webproxy','mieru'):(directory/'runtime').mkdir(mode=0o700,exist_ok=True)
     for name,body in bundle(s,members(s['id'])).items():
         target=directory/name;target.parent.mkdir(mode=0o700,parents=True,exist_ok=True);tmp=target.with_name(target.name+'.tmp');tmp.write_bytes(body) if isinstance(body,bytes) else tmp.write_text(body);os.chmod(tmp,0o600);tmp.replace(target)
 

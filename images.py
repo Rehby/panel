@@ -84,6 +84,10 @@ def start_job(id,action,data_dir,force=True,restart_services=None):
                 selected=image_updates.apply_update(image,data_dir,job,prepare_image,command,restart_services=restart_services)
                 with LOCK:job['reference']=selected['reference']
             else:prepare_image(image_updates.current(image),action,data_dir,job)
+            if action in ('build','update'):
+                try:command(['/bin/sh',str(ROOT/'deploy'/'cleanup-images.sh')],job,timeout=600)
+                except Exception as error:
+                    with LOCK:job['cleanup_error']=str(error)
             with LOCK:job.update(status='succeeded',finished=time.time())
         except Exception as e:
             with LOCK:job.update(status='failed',finished=time.time(),error=str(e))

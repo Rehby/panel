@@ -27,6 +27,7 @@ class MieruTest(unittest.TestCase):
         self.assertEqual(len(state['portBindings']),5)
         self.assertEqual(state['users'],[dict(name=u['id'],password=u['password'])])
         self.assertEqual(compose['services']['tunnel']['cap_drop'],['ALL'])
+        self.assertIn('./runtime:/etc/mita',compose['services']['tunnel']['volumes'])
         self.assertEqual(len(compose['services']['tunnel']['ports']),5)
         link=engine.profile(s,u)
         self.assertTrue(link.startswith('mierus://'))

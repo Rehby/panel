@@ -50,7 +50,7 @@ def bundle(s, users):
         if s.get('udp'):
             ports.append(f"{port}:{port}/udp")
     service = dict(image=BY_IMAGE['mieru']['reference'], command=[],
-                   volumes=['./mita-state.json:/etc/yptun/mita-state.json:ro', './runtime:/root/.config/mita'],
+                   volumes=['./mita-state.json:/etc/yptun/mita-state.json:ro', './runtime:/etc/mita'],
                    # mita chowns/chmods its RPC socket; root also needs access
                    # after the socket becomes owned by mita:mita with mode 0770.
                    ports=ports, restart='unless-stopped', cap_drop=['ALL'], cap_add=['NET_BIND_SERVICE', 'CHOWN', 'FOWNER', 'DAC_OVERRIDE'],

@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily cleanup of unused Docker build artifacts
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=30min
+
+[Install]
+WantedBy=timers.target

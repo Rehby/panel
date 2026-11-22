@@ -237,6 +237,12 @@ def update(revision):
             print('Запуск и проверка панели…', flush=True)
             run(['systemctl', 'start', 'yptun-panel'])
             health(values)
+            cleanup_units=('yptun-image-cleanup.service','yptun-image-cleanup.timer')
+            if all((ROOT/'deploy'/unit).is_file() for unit in cleanup_units):
+                for unit in cleanup_units:
+                    shutil.copyfile(ROOT/'deploy'/unit,Path('/etc/systemd/system')/unit)
+                run(['systemctl','daemon-reload'])
+                run(['systemctl','enable','--now','yptun-image-cleanup.timer'])
         else:
             result = run([sys.executable, str(ROOT / 'deploy' / 'install.py')], stdout=subprocess.PIPE, text=True)
             lines = result.stdout.splitlines()

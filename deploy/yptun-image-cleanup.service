@@ -1,0 +1,12 @@
+[Unit]
+Description=Clean unused Docker build artifacts
+After=docker.service
+Requires=docker.service
+ConditionPathExists=/opt/yptun-panel/deploy/cleanup-images.sh
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh /opt/yptun-panel/deploy/cleanup-images.sh
+TimeoutStartSec=10min
+Nice=10
+IOSchedulingClass=idle
