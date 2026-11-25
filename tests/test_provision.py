@@ -100,6 +100,21 @@ class ProvisionTest(unittest.TestCase):
         self.assertEqual(payload[8],b'\x01\x02\x03\x04')
         disabled=dict(u,enabled=False)
         self.assertNotIn(u['password'],engine.bundle(s,[disabled])['runtime/credentials.toml'])
+    def test_masterdns_profile_uses_direct_resolver_ip_and_service_port(self):
+        for host,resolver,expected in (
+            ('vpn.example.com','192.0.2.10','192.0.2.10:23456'),
+            ('vpn.example.com','2001:db8::10','[2001:db8::10]:23456'),
+            ('192.0.2.20','','192.0.2.20:23456'),
+        ):
+            with self.subTest(resolver=resolver):
+                s=self.service('masterdns',host=host,resolver_ip=resolver);u=self.access(s)
+                link=engine.profile(s,u)
+                query=parse_qs(urlsplit(link).query)
+                self.assertEqual(query['resolvers'],[expected])
+                self.assertEqual(query['domains'],['dns.example.com'])
+                self.assertEqual(subscriptions.link(s,u),link)
+        with self.assertRaisesRegex(ValueError,'IP-адрес прямого резолвера'):
+            self.service('masterdns',resolver_ip='vpn.example.com')
     def test_openflux_secret_and_context_match_server(self):
         s=self.service('openflux');u=self.access(s)
         config=json.loads(zlib.decompress(unbase64(engine.profile(s,u).split('/v1/',1)[1]),wbits=-15))

@@ -54,6 +54,14 @@ def prepare(s):
         try:ipaddress.ip_address(s['dns_domain'])
         except ValueError:pass
         else:raise ValueError('Для DNS-туннеля нужен домен, а не IP')
+        resolver_ip=str(s.get('resolver_ip') or '').strip()
+        if resolver_ip:
+            try:
+                address=ipaddress.ip_address(resolver_ip)
+                if getattr(address,'scope_id',None):raise ValueError('Scoped IPv6 address')
+            except ValueError as e:raise ValueError('Укажите IP-адрес прямого резолвера MasterDNS') from e
+            resolver_ip=str(address)
+        s['resolver_ip']=resolver_ip
         s.setdefault('engine_key',secrets.token_hex(16));s['encryption_method']=5
     if p=='openflux':
         s['room_url']=str(s.get('room_url','')).strip();url=urlsplit(s['room_url'])
@@ -184,7 +192,7 @@ def bundle(s,users):
         files['runtime/server_config.toml']=f'PROTOCOL_TYPE = "SOCKS5"\nDOMAIN = [{json.dumps(s["dns_domain"])}]\nUDP_HOST = "0.0.0.0"\nUDP_PORT = {s["port"]}\nDATA_ENCRYPTION_METHOD = 5\nENCRYPTION_KEY_FILE = "/data/encrypt_key.txt"\nSUPPORTED_UPLOAD_COMPRESSION_TYPES = [0, 1, 2, 3]\nSUPPORTED_DOWNLOAD_COMPRESSION_TYPES = [0, 1, 2, 3]\nDNS_UPSTREAM_SERVERS = ["1.1.1.1:53", "8.8.8.8:53"]\nUSE_EXTERNAL_SOCKS5 = false\nLOG_LEVEL = "INFO"\n'
         files['runtime/encrypt_key.txt']=s['engine_key'];svc.update(command=['-nowait'],environment=dict(CONFIG_FILE='server_config.toml'),volumes=['./runtime:/data'])
     elif p=='openflux':
-        files['runtime/key']=s['engine_key'];svc.update(command=['--role=exit','--mode=l4','--transport='+s['flux_transport'],'--url='+s['room_url'],'--encryption-key-file=/etc/yptun/key','--session-context='+s['room_url']],volumes=['./runtime:/etc/yptun:ro']);svc.pop('ports')
+        files['runtime/key']=s['engine_key'];svc.update(command=['--role=exit','--mode=l4','--transport='+s['flux_transport'],'--url='+s['room_url'],'--encryption-key-file=/etc/yptun/key','--session-context='+openflux_context(s)],volumes=['./runtime:/etc/yptun:ro']);svc.pop('ports')
     elif p=='trusttunnel':
         files['runtime/vpn.toml']=f'listen_address = "0.0.0.0:{s["port"]}"\ncredentials_file = "credentials.toml"\nipv6_available = false\nallow_private_network_connections = false\n[forward_protocol.direct]\n[listen_protocols.http1]\n[listen_protocols.http2]\n[listen_protocols.quic]\n'
         files['runtime/hosts.toml']='[[main_hosts]]\nhostname = '+json.dumps(s['sni'])+'\ncert_chain_path = "cert.pem"\nprivate_key_path = "key.pem"\nallowed_sni = []\n'
@@ -220,14 +228,21 @@ def tt_link(s,u):
     payload=b''.join(tlv(t,v) for t,v in [(0,b'\x01'),(1,s['sni']),(2,host+':'+str(s['port'])),(5,u['id']),(6,u['password']),(8,cert),(12,u['name'] if u.get('auto_name') else s['name']+' · '+u['name'])])
     return 'tt://?'+base64.urlsafe_b64encode(payload).decode().rstrip('=')
 
+def openflux_context(s):
+    # OpenFlux defaults to this context when the Cups carrier supplies no explicit context.
+    return 'http://#' if s['flux_transport']=='cupsonline' else s['room_url']
+
 def profile(s,u):
-    p=s['protocol'];host='['+s['host']+']' if ':' in s['host'] else s['host'];addr=host+':'+str(s['port'])
+    p=s['protocol']
+    host=(s.get('resolver_ip') or s['host']) if p=='masterdns' else s['host']
+    if ':' in host:host='['+host+']'
+    addr=host+':'+str(s['port'])
     if p in ('wireguard','amneziawg'):return wg_client(s,u)
     if p=='snolc':return 'snolc://'+addr+'?key='+base64.b64decode(s['server_public']).hex()+'#'+quote(u['name'] if u.get('auto_name') else s['name']+' · '+u['name'])
     if p=='masterdns':return 'masterdns://v1?'+urlencode(dict(domains=s['dns_domain'],key=s['engine_key'],enc=5,resolvers=addr))+'#'+quote(u['name'])
     if p=='trusttunnel':return tt_link(s,u)
     if p=='openflux':
-        cfg=dict(name=u['name'],secret=s['engine_key'],context=s['room_url'],transports=[dict(type=s['flux_transport'],url=s['room_url'])]);compress=zlib.compressobj(wbits=-15);data=compress.compress(json.dumps(cfg).encode())+compress.flush()
+        cfg=dict(name=u['name'],secret=s['engine_key'],context=openflux_context(s),transports=[dict(type=s['flux_transport'],url=s['room_url'])]);compress=zlib.compressobj(wbits=-15);data=compress.compress(json.dumps(cfg).encode())+compress.flush()
         return 'openflux://v1/'+base64.urlsafe_b64encode(data).decode().rstrip('=')
     if p=='olcrtc':return json.dumps(dict(engine='stealth',name=u['name'],id=s['room'],key=s['engine_key'],bypass_provider=s['provider'],transport=s['rtc_transport']))
     if p=='vkturn':

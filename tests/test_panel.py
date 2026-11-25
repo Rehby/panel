@@ -151,8 +151,8 @@ class PanelTest(unittest.TestCase):
         encoded=engine.profile(saved,u).split('/v1/',1)[1]
         config=json.loads(zlib.decompress(base64.urlsafe_b64decode(encoded+'='*(-len(encoded)%4)),wbits=-15))
         command=json.loads(engine.bundle(saved,[u])['compose.json'])['services']['tunnel']['command']
-        self.assertEqual(config['transports'][0]['url'],room);self.assertEqual(config['context'],room)
-        self.assertIn('--url='+room,command);self.assertIn('--session-context='+room,command)
+        self.assertEqual(config['transports'][0]['url'],room);self.assertEqual(config['context'],'http://#')
+        self.assertIn('--url='+room,command);self.assertIn('--session-context=http://#',command)
         self.assertEqual(config['secret'],saved['engine_key'])
         new_room='https://interview.cups.online/live-coding/?rooms=new'
         with patch.object(server,'create_openflux_rooms',return_value=new_room) as create:
