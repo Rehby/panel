@@ -12,6 +12,7 @@ import re
 import secrets
 import socket
 import subprocess
+import tempfile
 from urllib.parse import quote, urlencode, urlsplit
 import zlib
 from images import BY_IMAGE
@@ -21,8 +22,11 @@ SINGLE={'olcrtc','masterdns','openflux','snolc'}
 RTC_TRANSPORTS={'jitsi':('datachannel','vp8channel','seichannel','videochannel'),'mtslink':('vp8channel',),'vkcalls':('vp8channel','seichannel','videochannel'),'salutejazz':('datachannel',),'telemost':('vp8channel','videochannel','seichannel','datachannel')}
 IMAGE_IDS={'vkturn':'freeturn'}
 
+def openssl_binary():
+    return os.environ.get('YPTUN_OPENSSL') or next((p for p in ['/opt/homebrew/opt/openssl@3/bin/openssl','/usr/local/opt/openssl@3/bin/openssl'] if Path(p).is_file()),'openssl')
+
 def keypair():
-    openssl=os.environ.get('YPTUN_OPENSSL') or next((p for p in ['/opt/homebrew/opt/openssl@3/bin/openssl','/usr/local/opt/openssl@3/bin/openssl'] if Path(p).is_file()),'openssl')
+    openssl=openssl_binary()
     pem=subprocess.run([openssl,'genpkey','-algorithm','X25519'],check=True,capture_output=True).stdout
     private=subprocess.run([openssl,'pkey','-outform','DER'],input=pem,check=True,capture_output=True).stdout[-32:]
     public=subprocess.run([openssl,'pkey','-pubout','-outform','DER'],input=pem,check=True,capture_output=True).stdout[-32:]
@@ -228,13 +232,30 @@ def varint(value):
     if value<64:return bytes([value])
     if value<16384:return (value|0x4000).to_bytes(2,'big')
     return (value|0x80000000).to_bytes(4,'big')
+
+def trusttunnel_system_verifiable(certificate,hostname):
+    try:ipaddress.ip_address(hostname)
+    except ValueError:identity='-verify_hostname'
+    else:identity='-verify_ip'
+    try:
+        with tempfile.TemporaryDirectory() as directory:
+            chain=Path(directory)/'chain.pem'
+            chain.write_text(certificate)
+            result=subprocess.run([openssl_binary(),'verify','-purpose','sslserver',identity,hostname,'-untrusted',str(chain),str(chain)],capture_output=True,timeout=5)
+    except (OSError,subprocess.TimeoutExpired):return False
+    return result.returncode==0
+
 def tt_link(s,u):
     def tlv(tag,value):
         v=value.encode() if isinstance(value,str) else value
         return varint(tag)+varint(len(v))+v
     host='['+s['host']+']' if ':' in s['host'] else s['host']
-    cert=b''.join(base64.b64decode(block) for block in re.findall(r'-----BEGIN CERTIFICATE-----\s*(.*?)\s*-----END CERTIFICATE-----',s['certificate'],re.S))
-    payload=b''.join(tlv(t,v) for t,v in [(0,b'\x01'),(1,s['sni']),(2,host+':'+str(s['port'])),(5,u['id']),(6,u['password']),(8,cert),(12,u['name'] if u.get('auto_name') else s['name']+' · '+u['name'])])
+    fields=[(0,b'\x01'),(1,s['sni']),(2,host+':'+str(s['port'])),(5,u['id']),(6,u['password'])]
+    if not trusttunnel_system_verifiable(s['certificate'],s['sni']):
+        cert=b''.join(base64.b64decode(block) for block in re.findall(r'-----BEGIN CERTIFICATE-----\s*(.*?)\s*-----END CERTIFICATE-----',s['certificate'],re.S))
+        fields.append((8,cert))
+    fields.append((12,u['name'] if u.get('auto_name') else s['name']+' · '+u['name']))
+    payload=b''.join(tlv(tag,value) for tag,value in fields)
     return 'tt://?'+base64.urlsafe_b64encode(payload).decode().rstrip('=')
 
 def openflux_context(s):

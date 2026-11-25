@@ -1,10 +1,12 @@
 import base64
 import configparser
 import json
+import os
 from pathlib import Path
 import socket
 import subprocess
 import sys
+import tempfile
 import unittest
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlsplit
@@ -103,6 +105,27 @@ class ProvisionTest(unittest.TestCase):
         self.assertEqual(payload[8],b'\x01\x02\x03\x04')
         disabled=dict(u,enabled=False)
         self.assertNotIn(u['password'],engine.bundle(s,[disabled])['runtime/credentials.toml'])
+    def test_trusttunnel_uses_system_trust_for_verified_tls_chain(self):
+        with tempfile.TemporaryDirectory() as directory:
+            openssl=provision.openssl_binary()
+            subprocess.run([openssl,'req','-x509','-newkey','rsa:2048','-nodes','-days','1',
+                            '-subj','/CN=Test Root','-keyout','root.key','-out','root.pem'],
+                           cwd=directory,check=True,capture_output=True)
+            subprocess.run([openssl,'req','-newkey','rsa:2048','-nodes','-subj','/CN=vpn.example.com',
+                            '-keyout','leaf.key','-out','leaf.csr'],cwd=directory,check=True,capture_output=True)
+            path=Path(directory)
+            (path/'leaf.ext').write_text('subjectAltName=DNS:vpn.example.com\nextendedKeyUsage=serverAuth\n')
+            subprocess.run([openssl,'x509','-req','-days','1','-in','leaf.csr','-CA','root.pem',
+                            '-CAkey','root.key','-CAcreateserial','-extfile','leaf.ext','-out','leaf.pem'],
+                           cwd=directory,check=True,capture_output=True)
+            s=self.service('trusttunnel',certificate=(path/'leaf.pem').read_text());u=self.access(s)
+            with patch.dict(os.environ,{'SSL_CERT_FILE':str(path/'root.pem')}):
+                payload=tlv_items(unbase64(engine.profile(s,u).split('?',1)[1]))
+                self.assertNotIn(7,payload)
+                self.assertNotIn(8,payload)
+                wrong_name=engine.profile(dict(s,sni='other.example.com'),u)
+                self.assertIn(8,tlv_items(unbase64(wrong_name.split('?',1)[1])))
+            self.assertEqual(engine.bundle(s,[u])['runtime/cert.pem'],s['certificate'])
     def test_masterdns_profile_uses_direct_resolver_ip_and_service_port(self):
         for host,resolver,expected in (
             ('vpn.example.com','192.0.2.10','192.0.2.10:23456'),
