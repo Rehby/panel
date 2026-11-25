@@ -184,6 +184,7 @@ class PanelTest(unittest.TestCase):
         with patch.dict(os.environ,{'YPTUN_ALLOW_DOCKER':'1'}),patch.object(server.subprocess,'run',return_value=success) as run:
             self.assertEqual(server.create_openflux_rooms(),'https://interview.cups.online/live-coding/?rooms='+rooms)
             self.assertIn('--node-wizard',run.call_args.args[0]);self.assertEqual(json.loads(run.call_args.kwargs['input'])['method'],'createRooms')
+            self.assertIn('CUPS_STRIPE=0',run.call_args.args[0])
             for response in (dict(id=1,ok=False,error='403'),dict(id=1,ok=True,rooms='bad!')):
                 run.return_value=SimpleNamespace(returncode=0,stdout=json.dumps(response),stderr='')
                 with self.assertRaises(ValueError):server.create_openflux_rooms()

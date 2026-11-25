@@ -215,7 +215,7 @@ def create_openflux_rooms():
     if os.environ.get('YPTUN_ALLOW_DOCKER')!='1':raise ValueError('Для создания комнат cups.online включите управление Docker')
     image=images.image_updates.current(images.BY_IMAGE['openflux'])['reference']
     try:
-        result=subprocess.run(['docker','run','--rm','-i','--pull=never',image,'--node-wizard'],input='{"id":1,"method":"createRooms"}\n',capture_output=True,text=True,timeout=140)
+        result=subprocess.run(['docker','run','--rm','-i','--pull=never','--env','CUPS_STRIPE=0',image,'--node-wizard'],input='{"id":1,"method":"createRooms"}\n',capture_output=True,text=True,timeout=140)
     except (OSError,subprocess.TimeoutExpired) as e:
         raise ValueError('Не удалось запустить мастер OpenFlux: Docker недоступен или превышено время ожидания') from e
     if result.returncode:

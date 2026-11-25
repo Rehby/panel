@@ -140,8 +140,12 @@ class ProvisionTest(unittest.TestCase):
         self.assertEqual(query['domains'],['t.invalid'])
     def test_openflux_secret_and_context_match_server(self):
         s=self.service('openflux');u=self.access(s)
+        s['image']='yptun/openflux:edcf77a1848a'
         config=json.loads(zlib.decompress(unbase64(engine.profile(s,u).split('/v1/',1)[1]),wbits=-15))
         compose=json.loads(engine.bundle(s,[u])['compose.json'])
+        self.assertEqual(compose['services']['tunnel']['image'],images.BY_IMAGE['openflux']['reference'])
+        custom=json.loads(engine.bundle(dict(s,image_override='custom/openflux:test'),[u])['compose.json'])
+        self.assertEqual(custom['services']['tunnel']['image'],'custom/openflux:test')
         command=compose['services']['tunnel']['command']
         self.assertIn('--session-context='+config['context'],command)
         self.assertIn('--url='+config['transports'][0]['url'],command)

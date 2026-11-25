@@ -186,7 +186,9 @@ def wg_container(s):
     return svc
 
 def bundle(s,users):
-    p=s['protocol'];active=[u for u in users if u.get('enabled',True)];files={};svc=base_service(s['image']);services={'tunnel':svc}
+    p=s['protocol'];active=[u for u in users if u.get('enabled',True)];files={}
+    image=BY_IMAGE['openflux']['reference'] if p=='openflux' else s['image']
+    svc=base_service(image);services={'tunnel':svc}
     svc['ports']=[f'{s["port"]}:{s["port"]}/tcp',f'{s["port"]}:{s["port"]}/udp']
     if p in ('wireguard','amneziawg'):
         files['runtime/wg_confs/wg0.conf']=wg_server(s,active);svc=wg_container(s);svc['ports']=[f'{s["port"]}:{s["port"]}/udp'];services['tunnel']=svc
