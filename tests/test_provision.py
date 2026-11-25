@@ -2,9 +2,11 @@ import base64
 import configparser
 import json
 from pathlib import Path
+import socket
 import subprocess
 import sys
 import unittest
+from unittest.mock import patch
 from urllib.parse import parse_qs, urlsplit
 import zlib
 
@@ -35,6 +37,7 @@ def tlv_items(data):
 class ProvisionTest(unittest.TestCase):
     def service(self,protocol,**extra):
         fields=dict(protocol=protocol,provisioned=True,host='vpn.example.com',sni='vpn.example.com',port=23456,name='Service',room='room-example',dns_domain='dns.example.com',room_url='https://docs.example.com/document/abc',certificate='-----BEGIN CERTIFICATE-----\nAQI=\n-----END CERTIFICATE-----\n-----BEGIN CERTIFICATE-----\nAwQ=\n-----END CERTIFICATE-----',private_key='-----BEGIN PRIVATE KEY-----\nkey')
+        if protocol=='masterdns':fields['host']='192.0.2.20'
         fields.update(extra)
         return engine.validate(fields)
     def access(self,s,id='user1',others=None):
@@ -115,6 +118,26 @@ class ProvisionTest(unittest.TestCase):
                 self.assertEqual(subscriptions.link(s,u),link)
         with self.assertRaisesRegex(ValueError,'IP-адрес прямого резолвера'):
             self.service('masterdns',resolver_ip='vpn.example.com')
+        for invalid_domain in ('192.0.2.10','dns.example.com:23456'):
+            with self.subTest(dns_domain=invalid_domain), self.assertRaises(ValueError):
+                self.service('masterdns',dns_domain=invalid_domain)
+    def test_masterdns_resolves_host_and_sets_tunnel_domain_when_omitted(self):
+        s=self.service('masterdns',host='vpn.example.com',dns_domain='');u=self.access(s)
+        ipv6=(socket.AF_INET6,socket.SOCK_DGRAM,17,'',('2001:db8::10',0,0,0))
+        ipv4=(socket.AF_INET,socket.SOCK_DGRAM,17,'',('192.0.2.10',0))
+        for answers,expected in (([ipv6,ipv4],'192.0.2.10:23456'),([ipv6],'[2001:db8::10]:23456')):
+            with self.subTest(expected=expected), patch('provision.socket.getaddrinfo',return_value=answers) as lookup:
+                query=parse_qs(urlsplit(subscriptions.link(s,u)).query)
+                lookup.assert_called_once_with('vpn.example.com',None,type=socket.SOCK_DGRAM)
+                self.assertEqual(query['resolvers'],[expected])
+                self.assertEqual(query['domains'],['vpn.example.com'])
+        self.assertIn('DOMAIN = ["vpn.example.com"]',engine.bundle(s,[u])['runtime/server_config.toml'])
+        with patch('provision.socket.getaddrinfo',side_effect=socket.gaierror), self.assertRaisesRegex(ValueError,'не удалось определить IP'):
+            engine.profile(s,u)
+        s=self.service('masterdns',host='192.0.2.10',dns_domain='')
+        query=parse_qs(urlsplit(engine.profile(s,u)).query)
+        self.assertEqual(query['resolvers'],['192.0.2.10:23456'])
+        self.assertEqual(query['domains'],['t.invalid'])
     def test_openflux_secret_and_context_match_server(self):
         s=self.service('openflux');u=self.access(s)
         config=json.loads(zlib.decompress(unbase64(engine.profile(s,u).split('/v1/',1)[1]),wbits=-15))

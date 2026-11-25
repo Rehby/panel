@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 import re
 import secrets
+import socket
 import subprocess
 from urllib.parse import quote, urlencode, urlsplit
 import zlib
@@ -49,7 +50,13 @@ def prepare(s):
         if not re.fullmatch(r'[A-Za-z0-9._~:/?#\[\]@!&*+,;=%-]{1,300}',s['room']):raise ValueError('Укажите комнату или ссылку на видеозвонок')
         s.setdefault('engine_key',secrets.token_hex(32))
     if p=='masterdns':
-        s['dns_domain']=str(s.get('dns_domain') or s['host']).strip().lower()
+        domain=str(s.get('dns_domain') or '').strip().lower()
+        if not domain:
+            host=str(s['host']).strip().lower()
+            try:ipaddress.ip_address(host)
+            except ValueError:domain=host
+            else:domain='t.invalid'
+        s['dns_domain']=domain
         if len(s['dns_domain'])>253 or not all(re.fullmatch(r'[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?',label) for label in s['dns_domain'].split('.')):raise ValueError('Укажите DNS-домен туннеля')
         try:ipaddress.ip_address(s['dns_domain'])
         except ValueError:pass
@@ -232,14 +239,30 @@ def openflux_context(s):
     # OpenFlux defaults to this context when the Cups carrier supplies no explicit context.
     return 'http://#' if s['flux_transport']=='cupsonline' else s['room_url']
 
+def masterdns_resolver(s):
+    if s.get('resolver_ip'):return s['resolver_ip']
+    host=s['host']
+    try:return str(ipaddress.ip_address(host))
+    except ValueError:pass
+    try:addresses=socket.getaddrinfo(host,None,type=socket.SOCK_DGRAM)
+    except socket.gaierror:addresses=[]
+    if not addresses:raise ValueError('MasterDNS: не удалось определить IP адреса службы. Проверьте адрес или укажите IP прямого резолвера.')
+    # Prefer IPv4 for the managed server's IPv4 listener.
+    preferred=next((address for address in addresses if address[0]==socket.AF_INET),addresses[0])
+    return preferred[4][0]
+
 def profile(s,u):
     p=s['protocol']
-    host=(s.get('resolver_ip') or s['host']) if p=='masterdns' else s['host']
+    if p=='masterdns':
+        resolver=masterdns_resolver(s)
+        if ':' in resolver:resolver='['+resolver+']'
+        endpoint=f'{resolver}:{s["port"]}'
+        return 'masterdns://v1?'+urlencode(dict(domains=s['dns_domain'],key=s['engine_key'],enc=5,resolvers=endpoint))+'#'+quote(u['name'])
+    host=s['host']
     if ':' in host:host='['+host+']'
     addr=host+':'+str(s['port'])
     if p in ('wireguard','amneziawg'):return wg_client(s,u)
     if p=='snolc':return 'snolc://'+addr+'?key='+base64.b64decode(s['server_public']).hex()+'#'+quote(u['name'] if u.get('auto_name') else s['name']+' · '+u['name'])
-    if p=='masterdns':return 'masterdns://v1?'+urlencode(dict(domains=s['dns_domain'],key=s['engine_key'],enc=5,resolvers=addr))+'#'+quote(u['name'])
     if p=='trusttunnel':return tt_link(s,u)
     if p=='openflux':
         cfg=dict(name=u['name'],secret=s['engine_key'],context=openflux_context(s),transports=[dict(type=s['flux_transport'],url=s['room_url'])]);compress=zlib.compressobj(wbits=-15);data=compress.compress(json.dumps(cfg).encode())+compress.flush()
